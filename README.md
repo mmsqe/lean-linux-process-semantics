@@ -16,7 +16,7 @@ Zero dependencies beyond Lean itself. Toolchain pinned in `lean-toolchain`.
 | `Riscv/` | the ISA: decode, step, the register/memory helpers, alignment and access reporting |
 | `LinuxProcessSem/` | the machine model (`State*`), the syscall specs (`Sys/`), and `Run` — the trace semantics |
 | `EquivalenceDefinition/` | what it means for two images to agree: the equivalence, the measures, the classifier surfaces |
-| `Checks/` | checkers, witnesses, and the verification layer; `Capstone` is the audit surface |
+| `Checks/` | checkers, witnesses, and the verification layer |
 | `Common/` | shared machinery: the symbolic-execution tower, the ASan plan checker and its soundness proof, the tactic library |
 | `Examples/` | three worked demonstrations, each with a sealed specification and a proof that it is met |
 
@@ -32,27 +32,25 @@ lake build          # the library and the decoder executable
 1. `lake build` succeeds;
 2. no escape hatches — the tree contains no `sorry` and no added axioms;
 3. the axiom audit (`scripts/AxiomAudit.lean`) confirms nothing depends on
-   `sorryAx`;
+   `sorryAx`, and that every headline claim listed there still resolves;
 4. the decoder's smoke test succeeds.
 
 ## What is proved
 
-`LinuxSem/Checks/Capstone.lean` is the verification surface: it
-states every headline claim of this repository in one place, each paired with a
-concrete witness that makes it non-vacuous. It typechecks or the claims are not
-usable. Among them:
+The claims below are the repository's headline results. Each is proved, and
+shown non-vacuous by a witness, in the module named in the last column; the
+first column is the name `scripts/AxiomAudit.lean` pins.
 
-- `check_syscall_preserves_vm_wf` — an accepted syscall preserves page-granularity
-  disjointness of the mapping ledger. Unconditional: an unmodelled syscall number
-  makes the hypothesis impossible, so there is no coverage premise.
-- `coexec_progress_iff` — the two co-execution judgments agree.
-- `modeled_sysnos_exact` — the modelled syscall list is exactly the dispatched
-  set, in both directions.
-- `abrt_refutes_error_free_abort` — a concrete image whose run dies by SIGABRT,
-  firing the error-free abort refutation rather than merely stating it.
-- `check_sound` — the ASan plan checker is sound against the abstract semantics.
-- `DemoSealed`, `omni_strong_universal` — the worked demonstrations' sealed
-  specifications, and proofs that their images meet them.
+| claim | what it says | where |
+| --- | --- | --- |
+| `brk_grant_wf` → `check_syscall_preserves_vm_wf` | an accepted syscall preserves page-granularity disjointness of the mapping ledger. Unconditional: an unmodelled syscall number makes the hypothesis impossible, so there is no coverage premise. `brk` is the case it hinges on; `base_entry_unique` is the payoff. | `Checks/VmMapsDisjoint/` |
+| `coexec_progress_iff` | the two co-execution judgments agree, so a claim stated in one currency transfers. | `Checks/Omni.lean` |
+| `modeled_sysnos_exact` | the modelled syscall list is exactly the dispatched set, in both directions, and is duplicate-free and non-empty (`Specs.lean`, `modeled_sysnos.length = 90`, by `decide`). | `Checks/DispatchSurface.lean` |
+| `abrt_refutes_error_free_abort` | a concrete image whose run dies by SIGABRT, firing the error-free abort refutation rather than merely stating it; `abrt_dies_by_signal` discharges the premise at every limit. | `Checks/AbortWitness.lean` |
+| `exits_c_must_exit_at`, `exit0_image_must_exit_zero` | a successful `exits_c` walk forces an exit — for the concrete exit-0 image the walk is closed by `decide`. | `Checks/Examples.lean` |
+| `check_sound` | the ASan plan checker is sound against the abstract semantics, over a concrete `LIMIT` kept as an explicit parameter. | `Common/AsanPlanSound.lean` |
+| `gate_exit0_accepts`, `gate_exit1_rejects` | the accept/reject gate is decided on both demo verdicts. | `Checks/GatedSize.lean` |
+| `DemoSealed`, `omni_strong_universal` | the worked demonstrations' sealed specifications (a full `SPEC_PATCH_CLASSIFY` instance, so the classifier surface is inhabited), and proofs that their images meet them. | `Examples/` |
 
 ## Documentation
 

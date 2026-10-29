@@ -52,7 +52,7 @@
   NAMESPACE.  Everything sits in
   `LinuxSem.Checks.VmMapsDisjoint` — the single file's own
   namespace — so every fully-qualified name is unchanged and the root
-  module, `Checks/Capstone.lean` and the sibling `Checks/` files keep
+  module and the sibling `Checks/` files keep
   resolving them.
 -/
 

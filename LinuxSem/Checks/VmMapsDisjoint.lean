@@ -205,21 +205,24 @@
     Core           8.8 s     this file     0.25 s
 
   A cold `lake build` of the eleven (the nine arm modules in parallel with
-  `Core`, then this file, then `Capstone` and the root module) is 41.3 s
-  to 46.0 s wall on this 16-core machine, measured by deleting those
-  eleven oleans, `Capstone`'s and the root module's; the same protocol on
-  the ten-module layout, which elaborated PART 1/2 here, gives 51.0 s to
-  53.2 s.  (The machine's load drifted from ~9 to ~21 during these runs,
-  so the ranges are wider than the effect.)  A warm `lake build` with
-  nothing changed is ~0.2 s either way.  The two 32 s arms (`writev`,
-  `prlimit64`) are SINGLE declarations, so they are the floor on any wall
-  time for this subtree and everything else is arranged to finish before
-  them — `CostlyC` and `CostlyE` are alone in their modules for exactly
-  that reason.
+  `Core`, then this file, then the root module and its `Capstone` leaf) is
+  41.3 s to 46.0 s wall on this 16-core machine, measured by deleting those
+  eleven oleans, the leaf's and the root module's; the same protocol on the
+  ten-module layout, which elaborated PART 1/2 here, gives 51.0 s to
+  53.2 s.  (Those runs predate the deletion of `Checks/Capstone.lean`.  It
+  held nothing but `#check`s — no declaration, no dependency edge above this
+  file — so the numbers below stand; only a file that is no longer compiled
+  is missing from the protocol.)  (The machine's load drifted from ~9 to ~21
+  during these runs, so the ranges are wider than the effect.)  A warm
+  `lake build` with nothing changed is ~0.2 s either way.  The two 32 s arms
+  (`writev`, `prlimit64`) are SINGLE declarations, so they are the floor on
+  any wall time for this subtree and everything else is arranged to finish
+  before them — `CostlyC` and `CostlyE` are alone in their modules for
+  exactly that reason.
 
   What an edit costs depends on which module it lands in.  Each number
   below is a measured `lake build` after the edited module's olean (and
-  this aggregator's, `Capstone`'s and the root module's) was removed, so it
+  this aggregator's and the root module's) was removed, so it
   includes the re-elaboration of everything downstream of the edit:
 
     a cheap arm (`Frames.lean`)      19.4–20.5 s  (was 28.6–31.3 s)

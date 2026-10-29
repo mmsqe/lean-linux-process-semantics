@@ -14,7 +14,15 @@ if grep -RIn --include='*.lean' -E '\b(sorry|axiom)\b' LinuxSem/; then
 fi
 
 echo "== axiom audit (catches goal-dropping tactics) =="
-if lake env lean scripts/AxiomAudit.lean 2>&1 | grep -q "sorryAx"; then
+# The audit must ELABORATE, not merely avoid printing `sorryAx`: a stale name
+# in it fails with an unknown-identifier error, which the old
+# `grep -q sorryAx` guard could not distinguish from a clean run.
+audit=$(lake env lean scripts/AxiomAudit.lean 2>&1) || {
+  printf '%s\n' "$audit" >&2
+  echo "axiom audit did not elaborate (stale name, or a hole)" >&2
+  exit 1
+}
+if printf '%s\n' "$audit" | grep -q "sorryAx"; then
   echo "a checked theorem depends on sorryAx" >&2
   exit 1
 fi

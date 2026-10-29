@@ -373,5 +373,3 @@ import LinuxSem.Checks.DispatchSurface
 import LinuxSem.Checks.HaltsAllowed
 import LinuxSem.Checks.ErrorFreeInput
 import LinuxSem.Checks.MemoryMaterialization
-
-import LinuxSem.Checks.Capstone
