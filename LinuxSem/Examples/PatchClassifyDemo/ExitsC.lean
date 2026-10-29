@@ -598,22 +598,6 @@ theorem C2_must_exit_one_via_exits_c (lim : Int) (en : ExecEntry) (inp : ProcInp
     decoration), the realization lemmas (so no verdict is satisfied by a run
     that says nothing), and the error-free/modeled facts. -/
 
-theorem O1_does_not_exit_zero_via_exits_c (lim : Int) (en : ExecEntry) (inp : ProcInput) :
-    ¬ must_exit_with verdict_accept O1_image lim en inp := by
-  intro h
-  have hbad : verdict_accept = verdict_reject :=
-    must_exit_with_exclusive verdict_accept verdict_reject O1_image lim en inp h
-      (O1_must_exit_one_via_exits_c lim en inp)
-  exact absurd hbad verdict_accept_neq_reject
-
-theorem P1_does_not_exit_one_via_exits_c (lim : Int) (en : ExecEntry) (inp : ProcInput) :
-    ¬ must_exit_with verdict_reject P1_image lim en inp := by
-  intro h
-  have hbad : verdict_accept = verdict_reject :=
-    must_exit_with_exclusive verdict_accept verdict_reject P1_image lim en inp
-      (P1_must_exit_zero_via_exits_c lim en inp) h
-  exact absurd hbad verdict_accept_neq_reject
-
 theorem O1_realizes_exit_one_via_exits_c (lim : Int) (en : ExecEntry) (inp : ProcInput) :
     ∃ tr fs, bh_traces (run O1_image lim en inp) (tr ++ [event.ExitEv verdict_reject fs]) :=
   must_exit_with_realizes verdict_reject O1_image lim en inp
@@ -668,3 +652,5 @@ theorem O2_modeled_via_exits_c (lim : Int) (en : ExecEntry) (inp : ProcInput) :
 end Verdicts
 
 end LinuxSem.Examples.PatchClassifyDemo
+
+

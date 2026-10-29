@@ -65,6 +65,7 @@ import LinuxSem.Common.AgentLib
 import LinuxSem.Common.StoreOk
 import LinuxSem.Common.StepTac
 import LinuxSem.Common.AsanAcctShape
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanNodesAux
 
@@ -77,6 +78,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.BackingAlgebra
 open LinuxSem.Common.AxSymExec3Sound
@@ -119,19 +121,6 @@ theorem btgt_lit (a k : Int) (Ha : 0 ≤ a ∧ a < 2 ^ 64) :
 theorem c_eq_lit (a b : Int) (Ha : 0 ≤ a ∧ a < 2 ^ 64) (Hb : 0 ≤ b ∧ b < 2 ^ 64) :
     c_eq (Z_to_bv 64 a) (Z_to_bv 64 b) = decide (a = b) :=
   AgentLib.c_eq_lit a b Ha Hb
-
-/-- Distinct small `Int`s are distinct 5-bit register indices. -/
-theorem reg_neq (a b : Int) (Ha : 0 ≤ a ∧ a < 32) (Hb : 0 ≤ b ∧ b < 32) (Hne : a ≠ b) :
-    (Z_to_bv 5 a : reg) ≠ Z_to_bv 5 b := by
-  intro Heq
-  have h := congrArg BitVec.toNat Heq
-  rw [BitVec.toNat_ofInt, BitVec.toNat_ofInt] at h
-  have h3 : a % ((2 ^ 5 : Nat) : Int) = b % ((2 ^ 5 : Nat) : Int) := by
-    have h4 := congrArg (fun n : Nat => (n : Int)) h
-    rwa [Int.toNat_of_nonneg (Int.emod_nonneg _ (by decide)),
-      Int.toNat_of_nonneg (Int.emod_nonneg _ (by decide))] at h4
-  rw [Int.emod_eq_of_lt Ha.1 (by omega), Int.emod_eq_of_lt Hb.1 (by omega)] at h3
-  exact Hne h3
 
 /-! ### The two  `Ltac`s
 
@@ -267,78 +256,6 @@ theorem kwritable_sound (segs : List Segment) (E : env) (M : word → Option byt
     | KFill a n' c => exact HIH H
     | KUnk a n' => exact HIH H
 
-/-- `kimg_cut` is a weakening. -/
-theorem kimg_cut_sound (segs : List Segment) (E : env) (M : word → Option byte)
-    (k : List kentry) (a n : Int) (HK : know_ok segs E M k) :
-    know_ok segs E M (kimg_cut k a n) := by
-  intro K' hK'
-  rw [kimg_cut, List.mem_flatMap] at hK'
-  obtain ⟨K, hK, hK'⟩ := hK'
-  have HKK : kentry_ok segs E M K := HK K hK
-  cases K with
-  | KImg lo hi =>
-    simp only [kimg_cut1] at hK'
-    by_cases hc : (hi ≤ a || a + n ≤ lo) = true
-    · rw [ite_eq_left hc] at hK'
-      obtain rfl : K' = kentry.KImg lo hi := by simpa using hK'
-      exact HKK
-    · have hhi : a < hi := by
-        by_cases h : hi ≤ a
-        · exact absurd (by simp [h]) hc
-        · omega
-      have hlo : lo < a + n := by
-        by_cases h : a + n ≤ lo
-        · exact absurd (by simp [h]) hc
-        · omega
-      have h1 : (hi ≤ a || a + n ≤ lo) = false := by
-        simp [show ¬(hi ≤ a) from by omega, show ¬(a + n ≤ lo) from by omega]
-      rw [ite_eq_right (by rw [h1]; simp)] at hK'
-      simp only [kentry_ok] at HKK
-      obtain ⟨Hlo, Hhi, Hnone⟩ := HKK
-      rw [List.mem_append] at hK'
-      rcases hK' with hK' | hK'
-      · by_cases hl : lo < a
-        · rw [ite_eq_left hl] at hK'
-          obtain rfl : K' = kentry.KImg lo a := by simpa using hK'
-          simp only [kentry_ok]
-          exact ⟨Hlo, by omega, fun i hi1 hi2 => Hnone i (by omega) (by omega)⟩
-        · rw [ite_eq_right hl] at hK'
-          simp at hK'
-      · by_cases hh : a + n < hi
-        · rw [ite_eq_left hh] at hK'
-          obtain rfl : K' = kentry.KImg (a + n) hi := by simpa using hK'
-          simp only [kentry_ok]
-          exact ⟨by omega, Hhi, fun i hi1 hi2 => Hnone i (by omega) (by omega)⟩
-        · rw [ite_eq_right hh] at hK'
-          simp at hK'
-  | KWord a' w v =>
-    rw [show K' = kentry.KWord a' w v by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KZero a' n' =>
-    rw [show K' = kentry.KZero a' n' by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KBlob a' n' k' =>
-    rw [show K' = kentry.KBlob a' n' k' by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KAlign e m =>
-    rw [show K' = kentry.KAlign e m by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KRange e lo hi =>
-    rw [show K' = kentry.KRange e lo hi by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KWr a' n' =>
-    rw [show K' = kentry.KWr a' n' by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KDisj a1 n1 a2 n2 =>
-    rw [show K' = kentry.KDisj a1 n1 a2 n2 by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KFill a' n' c =>
-    rw [show K' = kentry.KFill a' n' c by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KUnk a' n' =>
-    rw [show K' = kentry.KUnk a' n' by simpa [kimg_cut1] using hK']
-    exact HKK
-
 /-! ### Registers after a routine that set two registers -/
 
 /-- A register index below 32, as a literal. -/
@@ -456,7 +373,7 @@ theorem fetch_lit (segs : List Segment) (z : Int) (w : word) (x : BitVec 32)
     fetch_word segs (Z_to_bv 64 z) = some x := by
   have h : Z_to_bv 64 z = w := by
     rw [← Hw]
-    exact AxSymExec3Sound.ofInt_toNat w
+    exact ofInt_toNat w
   rw [h]
   exact Hf
 
@@ -608,3 +525,5 @@ theorem munrestrict_mrestrict (H : word → Bool) (FULL : word → Option byte) 
   AsanAcct.munrestrict_mrestrict H FULL
 
 end LinuxSem.Common.AsanNodesAux
+
+

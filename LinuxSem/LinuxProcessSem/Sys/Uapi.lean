@@ -10,10 +10,11 @@
   file's header for the representation and fail-closed conventions every
   spec here follows.
 
-  **`Sys/Syscall.lean` has since landed** and defines both (`abi_low32`, `fd32`), so
-  the copies here are redundant; they are kept because this file is imported by
-  modules that predate `Sys.Syscall` in the build, and can be replaced by the
-  `Sys.Syscall` versions.
+  **`Sys/Syscall.lean` defines both** (`abi_low32`, `fd32`).  The local
+  `abi_low32` below is now a transparent alias to the `Sys.Syscall` one (the
+  two are definitionally equal), so this file no longer restates the
+  truncation; `fd32` stays a local definition built on that alias, exactly as
+  `Sys.Syscall.fd32` is built on the `Sys.Syscall` copy.
 
   `stat_set_size_size_ok`
   uses `bytes_le_to_Z_of_le_bytes` from `BvBase.lean`.  That general lemma
@@ -25,6 +26,7 @@
 -/
 import LinuxSem.LinuxProcessSem.BvBase
 import LinuxSem.LinuxProcessSem.Fs
+import LinuxSem.LinuxProcessSem.Sys.Syscall
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem.Fs
@@ -45,6 +47,29 @@ def z_lor (a b : Int) : Int := ((a.toNat ||| b.toNat : Nat) : Int)
 
 /--  `Z.land` (bitwise and), through `Nat`. -/
 def z_land (a b : Int) : Int := ((a.toNat &&& b.toNat : Nat) : Int)
+
+/-! ## `Z.ldiff` over `Int`
+
+    `Z.ldiff a b` is the bitwise difference `a land lnot b` — `a` with
+  every bit of `b` cleared.  It is the third of the `Z` bit operations
+  used on the ABI words here, next to `Z.lor` and `Z.land` above; Lean's
+  core `Int` library has none of them (only complement and the two
+  shifts), so, like those two, it is defined through `Nat`, which agrees
+  with the `Z` version whenever the operands are non-negative.  They
+  always are wherever it is used: a `word` read unsigned (`toNat`,
+  `abi_low32`, `flag32`, `cmd32`) or a literal ABI constant such as
+  `O_CLOEXEC`.
+
+    On such operands "clear the bits of `b` from `a`" is integer
+  subtraction of their intersection, so the body is `a - (a &&& b)`
+  rather than a spelled-out complement: the complement would have to be
+  taken at a fixed width (`2^64 - 1 - b`), and `a - z_land a b` needs no
+  width to be chosen at all, being exact as long as both arguments are
+  non-negative. -/
+
+/--  `Z.ldiff` (bitwise "`a` and not `b`"), through `Nat`, as
+    `a - (a &&& b)`; exact on the non-negative ABI operands. -/
+def z_ldiff (a b : Int) : Int := a - z_land a b
 
 /-! ## File-open flags and the path/file-descriptor ABI words -/
 
@@ -195,9 +220,10 @@ def O_DIRECTORY : Int := 65536
     the C conversion an `int` / `unsigned int` syscall parameter
     performs on the 64-bit register it is passed.
 
-  `Sys/Syscall.lean` now has the same definition, and this copy can be replaced by
-  it. -/
-def abi_low32 (w : word) : word := BitVec.ofInt 64 ((w.toNat % 2 ^ 32 : Nat) : Int)
+  This is `LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32`, as a transparent
+  alias: the `Sys.Syscall` body is `BitVec.ofNat 64 (w.toNat % 2 ^ 32)`, which
+  is definitionally the `ofInt`/`Nat` form this file used to spell out. -/
+abbrev abi_low32 (w : word) : word := LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32 w
 
 /-- THE FILE DESCRIPTOR ARGUMENT IS 32 BITS.  An fd reaches the kernel
     in a full 64-bit register, but every syscall entry point declares it
@@ -1510,61 +1536,27 @@ theorem stat_set_size_stable (n : Nat) (bs : List byte) (hlen : bs.length = 128)
 
 /-! ### The byte round trip that `stat_set_size_size_ok` needs
 
-  proof ends with `bytes_le_to_Z_of_le_bytes`, a lemma of `BvBase.lean`. That general
-  lemma is now in `BvBase.lean` (proved there from the `Nat` byte recursion), so the
-  gap this note used to record is closed. The instance needed HERE is
-  `bytes_le_to_Nat` of the eight little-endian bytes of `n`, which is `n` truncated
-  to 64 bits; that instance is still proved below, from the byte recursion alone,
-  because it is stated over `bytes_le_to_Nat` (the form this file's proof consumes)
-  and is shorter than re-deriving it from the general `Int` statement. -/
-
-/-- Splitting one byte off the front of a little-endian read: the byte
-    is the low eight bits and the rest is shifted up by eight. -/
-private theorem bytes_le_to_Nat_cons (b : byte) (rest : List byte) :
-    bytes_le_to_Nat (b :: rest) = bytes_le_to_Nat rest * 256 + b.toNat := by
-  have hb : b.toNat < 2 ^ 8 := b.isLt
-  simp only [bytes_le_to_Nat]
-  rw [Nat.or_comm, ← Nat.shiftLeft_add_eq_or_of_lt (i := 8) hb]
-  simp [Nat.shiftLeft_eq]
+  proof ends with `bytes_le_to_Z_of_le_bytes`, which `BvBase.lean` proves from the
+  `Nat` byte recursion, and the `Nat` round trip it rests on
+  (`bytes_le_to_Nat_Z_to_le_bytes`) is public there too, so this file cites it
+  rather than restating it.  The two `Nat` limb lemmas below (`mod_mul_256_of`,
+  `mod_mul_256`) are the modular arithmetic a byte step normalises with. -/
 
 /-- One limb of the modulus arithmetic below. -/
-private theorem mod_mul_256_of (q r M : Nat) (hr : r < 256) (hM : 0 < M) :
+theorem mod_mul_256_of (q r M : Nat) (hr : r < 256) (hM : 0 < M) :
     (256 * q + r) % (256 * M) = 256 * (q % M) + r := by
   have hqM : q % M < M := Nat.mod_lt _ hM
   have hrM : r < 256 * M := by omega
   rw [Nat.add_mod, Nat.mul_mod_mul_left, Nat.mod_eq_of_lt hrM, Nat.mod_eq_of_lt (by omega)]
 
-private theorem mod_mul_256 (x M : Nat) (hM : 0 < M) :
+theorem mod_mul_256 (x M : Nat) (hM : 0 < M) :
     x % (256 * M) = 256 * ((x / 256) % M) + x % 256 := by
   have h := mod_mul_256_of (x / 256) (x % 256) M (Nat.mod_lt _ (by decide)) hM
   rwa [Nat.div_add_mod] at h
 
-/-- `Z_to_le_bytes`'s shift, at a `Nat`-valued argument. -/
-private theorem int_shiftRight_8_natCast (m : Nat) :
-    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
-  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
-
-/-- The low byte of a `Nat`, as `Z_to_le_bytes` encodes it. -/
-private theorem toNat_ofInt_8_nat (m : Nat) :
-    (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
-  rw [BitVec.toNat_ofInt, Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
-  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
-  simp
-
-/-- The round trip: reading back `k` little-endian bytes of `m` gives `m`
-    truncated to `8k` bits. -/
-private theorem bytes_le_to_Nat_Z_to_le_bytes (k m : Nat) :
-    bytes_le_to_Nat (Z_to_le_bytes k (m : Int)) = m % 2 ^ (8 * k) := by
-  induction k generalizing m with
-  | zero => simp [Z_to_le_bytes, bytes_le_to_Nat, Nat.mod_one]
-  | succ k ih =>
-    rw [Z_to_le_bytes, int_shiftRight_8_natCast m]
-    rw [bytes_le_to_Nat_cons, ih (m / 256), toNat_ofInt_8_nat]
-    have hM : 0 < 2 ^ (8 * k) := Nat.two_pow_pos _
-    rw [show 8 * (k + 1) = 8 * k + 8 by omega, Nat.pow_add]
-    rw [Nat.mul_comm (2 ^ (8 * k)) (2 ^ 8)]
-    rw [show 2 ^ 8 = 256 by decide, mod_mul_256 m (2 ^ (8 * k)) hM]
-    omega
+-- `Z_to_le_bytes`'s shift and low-byte read are the canonical
+-- `BvBase.int_shiftRight_8_natCast` and `BvBase.toNat_ofInt_8_nat`; the
+-- round trip below rewrites with them rather than restating them.
 
 theorem stat_set_size_size_ok (n : Nat) (bs : List byte) (hlen : bs.length = 128) :
     stat_size_ok n (stat_set_size n bs) = true := by
@@ -1859,3 +1851,7 @@ example : timespec_ns_signed (List.replicate 8 0xff ++ List.replicate 8 0) = -10
 example : timespec_ns_signed tsExample = timespec_ns tsExample := by decide
 
 end
+
+
+
+

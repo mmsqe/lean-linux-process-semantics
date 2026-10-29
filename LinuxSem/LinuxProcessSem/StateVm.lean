@@ -784,7 +784,7 @@ private def vmFixture : Model :=
       { mkVmMaps [] [(BitVec.ofInt 64 0x1000, BitVec.ofInt 64 0x2000)]
           0 0 0x100000 with
         vm_noaccess := [(BitVec.ofInt 64 0x1800, BitVec.ofInt 64 0x800)] }
-      IEof [] none none none)
+      IEof [])
 
 example : vm_backed_bytes (m_vmmaps vmFixture) = 6144 := by decide
 
@@ -819,7 +819,7 @@ private def forgetFixture : Model :=
   with_vm_backing
     [(BitVec.ofInt 64 0x2000, BitVec.ofInt 64 0x1000)]
     [BitVec.ofInt 64 0x2000, BitVec.ofInt 64 0x4000]
-    (mkModel [] (mkVmMaps [] [] 0 0 0x100000) IEof [] none none none)
+    (mkModel [] (mkVmMaps [] [] 0 0 0x100000) IEof [])
 
 example : m_vm_lazy (vm_forget_range 0x2000 0x3000 forgetFixture) = [] := by
   decide
@@ -829,7 +829,7 @@ example :
       [BitVec.ofInt 64 0x4000] := by decide
 
 private def plainModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0x100000) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0x100000) IEof []
 
 /-- `lazy_interior` clips to whole pages: a 0x800-byte request at 0x2000
     contains no full page and records nothing; a 0x1000-byte one records
@@ -846,3 +846,4 @@ example :
       [(BitVec.ofInt 64 0x2000, BitVec.ofInt 64 0x1000)] := by decide
 
 end LinuxSem.LinuxProcessSem
+

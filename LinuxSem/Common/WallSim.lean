@@ -90,6 +90,7 @@ import LinuxSem.Common.CatSim
 import LinuxSem.Common.PropExec
 import LinuxSem.Common.SeqExec
 import LinuxSem.Common.CatExec
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 set_option maxHeartbeats 1000000
@@ -98,6 +99,7 @@ set_option linter.unusedSimpArgs false
 set_option linter.unusedSectionVars false
 
 namespace LinuxSem.Common.WallSim
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -1040,14 +1042,6 @@ abbrev wexit1 (segs : List Segment) (ms : machine_state) (bufs : List (List byte
     (code : word) : Prop :=
   to_wallexit segs (BitVec.ofInt 64 1) bufs code ms
 
-/-- The generic-channel event list at fd 1 is [CatSim.wevents].  (The same
-    fact [CatSim] carries as [wevents_ch_1].) -/
-theorem wevents_ch_fd1 (bufs : List (List byte)) :
-    wevents_ch (BitVec.ofInt 64 1) bufs = wevents bufs := by
-  induction bufs with
-  | nil => rfl
-  | cons b bs ih => simp only [wevents_ch, wevents, ih]
-
 /- =========================================================================
    Run-level packaging: the ORIGINAL full-delivery statements, for binaries
    whose every write is a put-style retry loop.
@@ -1238,8 +1232,9 @@ example (ms : machine_state) (c : word) :
 /-- The fd-1 event list is [CatSim.wevents], by computation. -/
 example : wevents_ch (BitVec.ofInt 64 1) [[BitVec.ofInt 8 65]]
     = wevents [[BitVec.ofInt 8 65]] :=
-  wevents_ch_fd1 _
+  wevents_ch_1 _
 
 end Sanity
 
 end LinuxSem.Common.WallSim
+

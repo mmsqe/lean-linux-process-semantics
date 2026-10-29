@@ -256,10 +256,12 @@ import LinuxSem.Common.CatSim
 import LinuxSem.Common.SeqExec
 import LinuxSem.Common.StoreOk
 import LinuxSem.Common.SymExec
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AxSymExec3
 
 open LinuxSem.Riscv
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.MemImageType
 open LinuxSem.LinuxProcessSem.RiscvSemantics
@@ -299,14 +301,8 @@ def two31z : Int := 2 ^ 31
 
 /-!     See the NOTES above for why `zland` is 64 bits wide. -/
 
-/-- `Z_to_bv n z`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `bv_unsigned w`, as an `Int`. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed w`, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
+/- `Z_to_bv`, `bv_unsigned`, `bv_signed` are the shared Rocq spellings,
+   imported from `LinuxSem.Common.RocqSpelling` (and opened above). -/
 
 /-- The low `n` bits set, i.e. `2^n - 1`. -/
 def zones (n : Nat) : Int := (2 : Int) ^ n - 1
@@ -4408,3 +4404,21 @@ theorem mk_itab_sound (segs : List Segment) (lo : Int) (n : Nat) :
     exact absurd Hi (by simp)
   · rw [ite_eq_right hp] at Hi
     exact absurd Hi (by simp)
+
+namespace LinuxSem.Common.AxSymExec3
+
+/-- Distinct small `Int`s are distinct 5-bit register indices. -/
+theorem reg_neq (a b : Int) (Ha : 0 ≤ a ∧ a < 32) (Hb : 0 ≤ b ∧ b < 32) (Hne : a ≠ b) :
+    (Z_to_bv 5 a : reg) ≠ Z_to_bv 5 b := by
+  intro Heq
+  have h := congrArg BitVec.toNat Heq
+  rw [BitVec.toNat_ofInt, BitVec.toNat_ofInt] at h
+  have h3 : a % ((2 ^ 5 : Nat) : Int) = b % ((2 ^ 5 : Nat) : Int) := by
+    have h4 := congrArg (fun n : Nat => (n : Int)) h
+    rwa [Int.toNat_of_nonneg (Int.emod_nonneg _ (by decide)),
+      Int.toNat_of_nonneg (Int.emod_nonneg _ (by decide))] at h4
+  rw [Int.emod_eq_of_lt Ha.1 (by omega), Int.emod_eq_of_lt Hb.1 (by omega)] at h3
+  exact Hne h3
+
+end LinuxSem.Common.AxSymExec3
+

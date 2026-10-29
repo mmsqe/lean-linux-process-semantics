@@ -51,6 +51,7 @@ import LinuxSem.Common.Hoare
 import LinuxSem.Common.SymExec
 import LinuxSem.Common.StepTac
 import LinuxSem.Common.AgentLib
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
 
 namespace LinuxSem.Common.AsanStartLoops
@@ -66,7 +67,7 @@ open LinuxSem.Common.SeqExec
 open LinuxSem.Common.StoreOk
 open LinuxSem.Common.Hoare (regs_agree)
 open LinuxSem.Common.SymExec
-open LinuxSem.Common.AxSymExec3 (Z_to_bv bv_unsigned bv_signed)
+open LinuxSem.Common.RocqSpelling
 
 /-- `Local Instance asanreflect_fx : PropExec.FPState :=
     PropExec.fx0`. -/
@@ -100,19 +101,6 @@ theorem btgt_lit (a k : Int) (Ha : 0 ≤ a ∧ a < 2 ^ 64) :
 theorem c_eq_lit (a b : Int) (Ha : 0 ≤ a ∧ a < 2 ^ 64) (Hb : 0 ≤ b ∧ b < 2 ^ 64) :
     c_eq (Z_to_bv 64 a) (Z_to_bv 64 b) = decide (a = b) :=
   AgentLib.c_eq_lit a b Ha Hb
-
-/-- Distinct small `Z`s are distinct 5-bit register indices. -/
-theorem reg_neq (a b : Int) (Ha : 0 ≤ a ∧ a < 32) (Hb : 0 ≤ b ∧ b < 32) (Hne : a ≠ b) :
-    (Z_to_bv 5 a : reg) ≠ Z_to_bv 5 b := by
-  intro Heq
-  have h := congrArg BitVec.toNat Heq
-  rw [BitVec.toNat_ofInt, BitVec.toNat_ofInt] at h
-  have h3 : a % ((2 ^ 5 : Nat) : Int) = b % ((2 ^ 5 : Nat) : Int) := by
-    have h4 := congrArg (fun n : Nat => (n : Int)) h
-    rwa [Int.toNat_of_nonneg (Int.emod_nonneg _ (by decide)),
-      Int.toNat_of_nonneg (Int.emod_nonneg _ (by decide))] at h4
-  rw [Int.emod_eq_of_lt Ha.1 (by omega), Int.emod_eq_of_lt Hb.1 (by omega)] at h3
-  exact Hne h3
 
 /-! ## The two  `Ltac`s
 
@@ -612,3 +600,4 @@ theorem pn_loop (segs : List Segment) (x : Int) (w0 w1 w2 w3 w4 : BitVec 32)
 end PnLoop
 
 end LinuxSem.Common.AsanStartLoops
+

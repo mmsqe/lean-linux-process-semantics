@@ -150,6 +150,7 @@
   avoid unfolding the recursion).
   Word hygiene: this file contains no proof hole and no extra postulate.
 -/
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
 
 namespace LinuxSem.Common.AxSymExec3B
@@ -161,6 +162,7 @@ open LinuxSem.LinuxProcessSem.RiscvSemantics
 open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 
 local instance axsymexec3b_fx : FPState := fx0
 

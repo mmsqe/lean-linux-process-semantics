@@ -823,7 +823,7 @@ private def demoFds : List (word × FdEntry) :=
 /-- The model the checks run in: the table above, an empty VM ledger, an
     empty file system, EOF on stdin, no halt, no tid and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- `EPOLL_CTL_DEL` is the op whose event struct is never copied — and
     `ep_op_has_event` is the test, over the low half. -/
@@ -1016,7 +1016,7 @@ private def demoHoleFds : List (word × FdEntry) :=
     (3, FdEntry.FdPipe 0 true), (4, FdEntry.FdSocket SockState.SkFresh) ]
 
 private def demoHoleModel : Model :=
-  mkModel demoHoleFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoHoleFds (mkVmMaps [] [] 0 0 0) IEof []
 
 example : alloc_fd demoHoleFds = 2 := by decide
 example : lowest_fd demoHoleFds demoInput demoHoleModel

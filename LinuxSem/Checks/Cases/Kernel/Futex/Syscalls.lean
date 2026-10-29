@@ -10,7 +10,7 @@
   `Sys` module, without running a binary.
 
   Spelling.  `Z` is `Int`, `Z_to_bv 64 z` is `BitVec.ofInt 64 z`,
-  `bv_unsigned w` is `(w.toNat : Int)` (a local `abbrev` below, as
+  `bv_unsigned w` is `(w.toNat : Int)` (`LinuxSem.Common.RocqSpelling`'s, as
   throughout this tree), `Ok …`/`unmodeled` are `.ok …`/`.unmodeled`,
   `mkEffect` is `State.mkEffect`, `mkInput` is the `SyscallInput`
   constructor, and `input`/`pure` are the monad's.
@@ -37,6 +37,7 @@ import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.Checks.Sys.Kernel.Futex.Syscalls
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Futex.Syscalls
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Fork
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -55,16 +56,10 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Kernel.Futex.Syscalls
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each is a transparent alias, so no statement below changes meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
+/-! `bv_unsigned` and `Z_to_bv` come from `LinuxSem.Common.RocqSpelling`,
+    opened above. -/
 
 /-! ## Three answers and no fourth
 

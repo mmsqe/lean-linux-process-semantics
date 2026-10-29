@@ -72,6 +72,8 @@ open LinuxSem.Checks.VmMapsDisjoint
 
 namespace LinuxSem.Checks.VmMapsDisjoint
 
+open LinuxSem.Common.RocqSpelling
+
 /-- `List.Forall`, at the two constructors the table statement
     uses (`nil`, `cons`).  Lean's core list library has no such predicate,
     so it is declared here rather than restating the table statement —

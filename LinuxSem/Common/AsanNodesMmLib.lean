@@ -209,8 +209,12 @@ import LinuxSem.Common.RefNodes
 import LinuxSem.Common.NoReserve
 import LinuxSem.Common.AllocSim
 import LinuxSem.Common.AsanCeil
+import LinuxSem.Common.RocqSpelling
+import LinuxSem.Common.SharedFacts
 
 namespace LinuxSem.Common.AsanNodesMmLib
+
+open LinuxSem.Common.SharedFacts (materialize_model_accesses_nil)
 
 open LinuxSem.Riscv hiding zlog2
 open LinuxSem.LinuxProcessSem
@@ -232,6 +236,7 @@ open LinuxSem.Common.StreamExec
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AgentNodes
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.AxSymExec3Sound
 open LinuxSem.Common.AxSymRun3
@@ -336,7 +341,7 @@ theorem sum_sizes_live (l : List (word × word)) : sum_sizes l = live_bytes l :=
 theorem sum_sizes_app (l1 l2 : List (word × word)) :
     sum_sizes (l1 ++ l2) = sum_sizes l1 + sum_sizes l2 := by
   rw [sum_sizes_live, sum_sizes_live, sum_sizes_live]
-  exact BackingAlgebra.live_bytes_app l1 l2
+  exact LinuxSem.LinuxProcessSem.Sys.Mm.Mremap.live_bytes_app l1 l2
 
 /-- `region_free`, read semantically (`RefNodes.region_free_In` /
     `region_free_intro` are the `Int` forms). -/
@@ -350,15 +355,6 @@ theorem region_free_sem (l : List (word × word)) (lo n : word) (z : Int)
   simp only [bv_unsigned] at *
   have Hov := RefNodes.region_free_In l lo n b s Hrf Hin
   omega
-
-/-- `region_free` on an append. -/
-theorem region_free_app (l1 l2 : List (word × word)) (lo n : word) :
-    region_free (l1 ++ l2) lo n = (region_free l1 lo n && region_free l2 lo n) := by
-  induction l1 with
-  | nil => rfl
-  | cons hd tl ih =>
-      obtain ⟨a, s⟩ := hd
-      simp only [List.cons_append, region_free, ih, Bool.and_assoc]
 
 /-- `map_contains`, semantically. -/
 theorem map_contains_intro (l : List (word × word)) (lo n b s : word)
@@ -1191,41 +1187,6 @@ theorem stepacc_ecall_epend (segs : List Segment) (regs : BvMap word) (pc : word
   rw [HF]
   simp only [decode_exec_accesses, HE, ite_eq_left]
   rfl
-
-/-- An access-free instruction is a silent deterministic node on ANY model. -/
-theorem node_instr_noacc (segs : List Segment) (ms : machine_state) (model : Model)
-    (ms' : machine_state)
-    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = none)
-    (Hstep : step_accesses segs ms = .MachineOk (mkAccessReport ms' [])) :
-    node_ok segs (mkCfg ms model) Unit (fun _ => []) (fun _ => mkCfg ms' model) := by
-  have Hacc : mi_account_step segs ms model = .MachineOk (ms', model) := by
-    unfold mi_account_step
-    rw [Hstep]
-    dsimp only [mkAccessReport]
-    rw [materialize_model_accesses_nil]
-  constructor
-  · intro _
-    exact sstep.instr ms model ms' model Hh Hsvc Hacc
-  · intro e st hss
-    cases hss with
-    | instr ms0 model0 ms1 model1 hh hsvc hstep =>
-      rw [Hacc] at hstep
-      obtain ⟨rfl, rfl⟩ := hstep
-      exact ⟨(), rfl, rfl⟩
-    | instr_fault ms0 model0 hh hsvc hstep =>
-      rw [Hacc] at hstep; cases hstep
-    | instr_unmodeled ms0 model0 hh hsvc hstep =>
-      rw [Hacc] at hstep; cases hstep
-    | syscall ms0 model0 x8 eff m' m'' evs hh hsvc hspec hh' hmat =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | syscall_materialization_fault ms0 model0 x8 eff m' evs hh hsvc hspec hh' hmat =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | exit ms0 model0 x8 eff m' evs code hh hsvc hspec hh' hk =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | killed ms0 model0 x8 eff m' evs sig hh hsvc hspec hk =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | syscall_unmodeled ms0 model0 x8 hh hsvc hspec =>
-      rw [Hsvc] at hsvc; cases hsvc
 
 /-- The `ecall` entry step, silently, for `srealizes`. -/
 theorem srz_sys_lazy (segs : List Segment) (regs : BvMap word) (pc : word)
@@ -2952,8 +2913,8 @@ theorem mmap_len_sound (SEGS : List Segment) (A : atable) (LIMIT : Int) (nx0 : N
             AllocSim.page_round_up_Z_aligned _ (by omega) Hmod
           rw [Hpr]
           refine ⟨?_, by omega, Hu64.2, ?_, by omega, by omega, by omega, Hmod, ?_⟩
-          · rw [R11]; exact (AxSymExec3Sound.ofInt_toNat _).symm
-          · exact (AxSymExec3Sound.ofInt_toNat _).symm
+          · rw [R11]; exact (ofInt_toNat _).symm
+          · exact (ofInt_toNat _).symm
           · intro E' hE'; exact hE'
         · rw [ite_eq_right hc] at HML
           simp at HML
@@ -8120,3 +8081,10 @@ theorem dest_cs1_ok (SEGS : List Segment) (A : atable) (LIMIT : Int)
     field equations (`rfl` `have`s) or finish with `Int.le_trans` instead of
     `omega` (`co_totsz`, `co_eager`).
 -/
+
+
+
+
+
+
+

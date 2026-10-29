@@ -67,6 +67,7 @@ open LinuxSem.Common.StreamSim
 open LinuxSem.Common.StoreOk
 open LinuxSem.Common.WxExec
 open LinuxSem.Common.ArgvEnv
+open LinuxSem.Examples.RwxFlagNs.RwxFlagNsDefs
 
 namespace LinuxSem.Examples.RwxFlagNs
 
@@ -204,10 +205,6 @@ theorem SD_100dc :
 
 theorem SD_100e0 :
     decodeAny 0x00008067 = some (Instr.jalr 0#5 0x01#5 0x000#12, 4) := by
-  decide
-
-theorem SD_100a4 :
-    decodeAny 0x05d00893 = some (Instr.opImm .ADD 0x11#5 0x00#5 0x05d#12, 4) := by
   decide
 
 theorem SD_100a8 : decodeAny 0x00000073 = some (Instr.ecall, 4) := by
@@ -426,7 +423,7 @@ theorem source_wexit (av ev : List (List byte)) (Hva : valid_argv av) (Hve : val
                             (BitVec.ofInt 64 0x100e8) (word_to_le_bytes 8 (envp_ptr av rsp)))
                           stext_lo stext_hi :=
                         wx_clear_store _ _ _ hclear0 (by decide)
-                          (by rw [length_word_to_le_bytes]; decide)
+                          (by rw [length_N_to_le_bytes]; decide)
                       -- 0x100a0 jal ra, main (0x100d0)
                       apply to_wexit.tw_step
                       · rfl
@@ -493,7 +490,7 @@ theorem source_wexit (av ev : List (List byte)) (Hva : valid_argv av) (Hve : val
                                   · refine step_addi_at_wx source_segs _ _ _ _ _ _ _ _
                                       (BitVec.ofInt 64 93)
                                       (wx_fetch_intro source_segs _ _ _ stext_lo stext_hi source_no_ro_exec hclear2
-                                        (by decide) (by decide) (by decide) SF_100a4) rfl SD_100a4 (by decide) ?_
+                                        (by decide) (by decide) (by decide) SF_100a4) rfl TD_10011a0 (by decide) ?_
                                     rfl
                                   · step_simpl
                                     -- 0x100a8 ecall — exit(5)
@@ -510,3 +507,5 @@ theorem source_wexit (av ev : List (List byte)) (Hva : valid_argv av) (Hve : val
 end RwxFlagNsSource
 
 end LinuxSem.Examples.RwxFlagNs
+
+

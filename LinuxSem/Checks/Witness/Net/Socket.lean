@@ -51,15 +51,18 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
   (rw_bytes_max modeled_rw_count access_ok_zero)
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff)
 open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite (UIO_FASTIOV)
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket
 open LinuxSem.Checks.Witness.Prelude
 
-/-- The syscall layer's 32-bit argument truncation — see the checker
-    file's copy of the same abbreviation. -/
-private abbrev abi_low32 (w : word) : word :=
-  LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32 w
+/- The syscall layer's 32-bit argument truncation, bound to the canonical
+   `Syscall.abi_low32` (the checker file binds the same name the same way).
+   `Sys.Uapi` carries a staging alias of the same function, so the bare name
+   is ambiguous once both namespaces are open, and the checkers must use the
+   one the specs use; the `local notation` below is what disambiguates it.
+   It declares nothing — unlike the `private abbrev` it replaces — and it
+   expands to the canonical name, so the terms below are `Syscall`'s. -/
+local notation "abi_low32" => LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32
 
 /-- `Uaccess.access_ok_zero` as a witness: the zero answer where the
     model is sure the range passed `access_ok`, -EFAULT where it is sure

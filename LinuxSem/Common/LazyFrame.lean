@@ -15,7 +15,7 @@
   materializes nothing, so the accounted step still preserves the
   model exactly ([materialize_model_accesses_disjoint], the common
   generalization of [State.materialize_model_accesses_no_lazy] and
-  [DivergeSim.materialize_model_accesses_nil] — both are its vacuous
+  [SharedFacts.materialize_model_accesses_nil] — both are its vacuous
   instances), and the [to_spin] smart-constructor family gains the
   disjoint spellings ([ts_spin_disjoint] / [ts_step_disjoint]).
 
@@ -85,15 +85,18 @@
     section is present HERE, at the end, under its own banner (the
     lemmas are stated over this file's predicates and nothing else).
   - `materialize_model_accesses_nil` already exists as
-    `Common.DivergeSim.materialize_model_accesses_nil` (its `accs = []`
+    `Common.SharedFacts.materialize_model_accesses_nil` (its `accs = []`
     vacuous instance of the theorem below) and is NOT duplicated here.
 -/
 
 import LinuxSem.Common.DivergeSim
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
 namespace LinuxSem.Common.LazyFrame
+
+open LinuxSem.Common.SharedFacts
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -153,55 +156,6 @@ theorem materialize_accesses_no_new (lazy : List (word × word))
 /- ================================================================= -/
 /- Which pages an access report can name                             -/
 /- ================================================================= -/
-
-/-- `LazyFrame:137`.  A page inserted into a list is the inserted page
-    or was already there. -/
-theorem page_insert_in (p q : word) (pages : List word)
-    (h : p ∈ page_insert q pages) : p = q ∨ p ∈ pages := by
-  unfold page_insert at h
-  split at h
-  · exact Or.inr h
-  · rcases List.mem_cons.mp h with h' | h'
-    · exact Or.inl h'
-    · exact Or.inr h'
-
-/-- `LazyFrame:147`.  Every page the cursor inserts is the page of some
-    byte offset [k < n] past [base] (in unwrapped [Z], matching the
-    cursor). -/
-theorem access_pages_acc_in (base : Int) (n : Nat) (pages : List word) (p : word)
-    (h : p ∈ access_pages_acc base n pages) :
-    p ∈ pages ∨ ∃ k, k < n ∧ p = page_base_of (base + (k : Int)) := by
-  induction n generalizing base pages with
-  | zero => exact Or.inl (by simpa [access_pages_acc] using h)
-  | succ k ih =>
-    simp only [access_pages_acc] at h
-    rcases ih (base + 1) _ h with hin | ⟨j, hj, hp⟩
-    · rcases page_insert_in _ _ _ hin with heq | hin
-      · subst heq
-        exact Or.inr ⟨0, by omega, by simp⟩
-      · exact Or.inl hin
-    · refine Or.inr ⟨j + 1, by omega, ?_⟩
-      rw [hp]
-      congr 1
-      omega
-
-/-- `LazyFrame:161`.  Every page an access report can name is either
-    already in the list or is the page of some byte [k < n] past one of
-    the report's accesses. -/
-theorem accesses_pages_in (accs : List (word × Nat)) (pages : List word) (p : word)
-    (h : p ∈ accesses_pages accs pages) :
-    p ∈ pages ∨ ∃ a n k, (a, n) ∈ accs ∧ k < n
-      ∧ p = page_base_of ((a.toNat : Int) + (k : Int)) := by
-  induction accs generalizing pages with
-  | nil => exact Or.inl (by simpa [accesses_pages] using h)
-  | cons x accs ih =>
-    obtain ⟨aw, n⟩ := x
-    simp only [accesses_pages] at h
-    rcases ih _ h with hin | ⟨a', n', k, hin', hk, hp⟩
-    · rcases access_pages_acc_in (aw.toNat : Int) n pages p hin with hp' | ⟨k, hk, hp'⟩
-      · exact Or.inl hp'
-      · exact Or.inr ⟨aw, n, k, List.mem_cons_self, hk, hp'⟩
-    · exact Or.inr ⟨a', n', k, List.mem_cons_of_mem _ hin', hk, hp⟩
 
 /-- The page base of a non-negative, non-wrapping `Z` offset is that
     offset rounded DOWN to a page, read back into `Z` — the `bv_unsigned`
@@ -270,7 +224,7 @@ theorem page_in_ranges_outside (lazy : List (word × word)) (a : word) (n k : Na
     model.  The common generalization of
     [State.materialize_model_accesses_no_lazy] (take
     [m_vm_lazy m = []]: the hypothesis is vacuous) and of
-    [DivergeSim.materialize_model_accesses_nil] (take [accs = []]:
+    [SharedFacts.materialize_model_accesses_nil] (take [accs = []]:
     ditto). -/
 theorem materialize_model_accesses_disjoint (m : Model) (accs : List (word × Nat))
     (Hout : accesses_outside_lazy accs (m_vm_lazy m)) :
@@ -387,3 +341,9 @@ theorem accesses_outside_lazy_shrink (a : word) (len n : Nat)
   cases Hin
   exact access_outside_range_mono a len n lo sz Hle
     (Hout a len lo sz (by simp) Hlz)
+
+
+
+
+
+

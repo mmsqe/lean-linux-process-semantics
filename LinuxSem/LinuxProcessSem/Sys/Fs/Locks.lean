@@ -31,9 +31,10 @@
   `Sys/Syscall.lean`'s, and `unmodeled` is `Monad.lean`'s.
 
   `Z.ldiff a b` is `a land lnot b`; Lean
-  core has no `Int` bitwise and-not, so `z_ldiff` is added below, where
-  its one caller needs it — the same treatment `Sys/Fs/Pipe.lean` gives
-  the same primitive.
+  core has no `Int` bitwise and-not, so `Sys/Uapi.lean` ports it next to
+  `z_lor`/`z_land`, and the `z_ldiff` below is a transparent alias to
+  that one, kept where its one caller reads it — the same treatment
+  `Sys/Fs/Pipe.lean` gives the same primitive.
 -/
 import LinuxSem.LinuxProcessSem.MonadInstances
 import LinuxSem.LinuxProcessSem.StateLedger
@@ -70,21 +71,22 @@ def flock_mand_b (cmd : word) : Bool :=
 /-! ## `Z.ldiff` over `Int`
 
   `flock_base` is the one place in this file that needs 
-    `Z.ldiff a b = a land lnot b`.  `Sys/Uapi.lean` ports `Z.lor` and
-    `Z.land` through `Nat` but not this one, and Lean core has no `Int`
-    bitwise operations, so the helper sits here, next to its only
-    caller. -/
+    `Z.ldiff a b = a land lnot b`.  `Sys/Uapi.lean` now defines it
+    (`Uapi.z_ldiff`, body `a - (a &&& b)`), so the helper below is a
+    transparent alias to that one rather than a second spelling. -/
 
-/--  `Z.ldiff` — the bitwise difference `a land lnot b` — through
-    `Nat`, exactly as `Uapi.z_lor`/`z_land` spell `Z.lor`/`Z.land`.
+/--  `Z.ldiff` — the bitwise difference `a land lnot b` — is
+    `Uapi.z_ldiff`, the canonical definition, as a transparent alias.
 
-    The complement is taken at 64 bits, which is exact for the inputs
-    this file has: `a` is a `word` read unsigned (`cmd.toNat`) and `b`
-    is `LOCK_NB`, 4, so both lie below `2^64`; a value below `2^64`
-    occupies no bit above 63, hence
-    `a land lnot b = a land (2^64 - 1 - b)`.  Truncating either argument
-    would be visible; both are bounded. -/
-def z_ldiff (a b : Int) : Int := ((a.toNat &&& (2 ^ 64 - 1 - b.toNat) : Nat) : Int)
+    The body there is `a - (a &&& b)`, which agrees with
+    `a land lnot b` on the operands this file has: `a` is a `word` read
+    unsigned (`cmd.toNat`) and `b` is `LOCK_NB`, 4, so both lie below
+    `2^64`, and a value below `2^64` occupies no bit above 63.  On such
+    bounded operands the `Nat`-mask form this file used to spell
+    (`a &&& (2^64 - 1 - b)`) and `a - (a &&& b)` are the same value:
+    either way exactly the bits of `b` are cleared from `a`.  Truncating
+    either argument would be visible; both are bounded. -/
+abbrev z_ldiff (a b : Int) : Int := LinuxSem.LinuxProcessSem.Sys.Uapi.z_ldiff a b
 
 /-- `cmd & ~LOCK_NB` — the word `flock_translate_cmd` switches on.
 
@@ -476,7 +478,7 @@ example : flock_sole_opener demoFds dupPath = false := by decide
 /-- The model the checks run in: the fd table above, an empty VM ledger,
     an empty file system, EOF on stdin, no halt and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A syscall input for `flock` (32).  The spec reads none of it; it is
     here because a `SysSpec` is a relation on an input as well as a
@@ -505,7 +507,7 @@ private def demoInput : SyscallInput :=
 attribute [local simp]
   flock_spec getModelSpec bind_getModel fd_lookup demoFds demoModel
   m_fds mkModel flock_mand_b flock_cmd_ok_b flock_unlock_b flock_base
-  flock_sole_opener path_openers Fs.path_eqb bv_eqb z_ldiff z_land
+  flock_sole_opener path_openers Fs.path_eqb bv_eqb z_ldiff Uapi.z_ldiff z_land
   outPath dupPath
   LOCK_SH LOCK_EX LOCK_NB LOCK_UN LOCK_MAND err_ret ret_only pure
   unmodeled

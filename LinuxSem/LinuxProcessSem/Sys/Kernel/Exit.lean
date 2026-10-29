@@ -362,7 +362,7 @@ private def check_input : SyscallInput :=
 /-- A model whose process has no child — `mkModel`'s default, which is the
     one state `wait4` answers. -/
 private def check_model : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The same model after the creating arm: `with_children`, which is what
     `Kernel.Fork.clone_resolve` applies on its success branch. -/
@@ -546,3 +546,4 @@ example :
   rfl
 
 end LinuxSem.LinuxProcessSem.Sys.Kernel.Exit
+

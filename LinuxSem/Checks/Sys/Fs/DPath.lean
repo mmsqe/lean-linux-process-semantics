@@ -230,7 +230,7 @@ theorem check_getcwd_complete_unmodeled (size : word) (m : Model)
     system, EOF on stdin, no halt and no rlimit.  Nothing in it can
     matter to getcwd — the spec never looks at the model. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- `getcwd(NULL, 0)` is -ERANGE, and the checker accepts it. -/
 example : check_getcwd 0 (mkEffect (errno_ret ERANGE) [] []) demoModel

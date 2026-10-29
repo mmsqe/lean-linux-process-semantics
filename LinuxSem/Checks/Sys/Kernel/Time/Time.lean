@@ -91,20 +91,6 @@ private theorem one_write_ne_unmodeled (m : Model) (tv : word) (eff : SyscallEff
   · split at hh <;> exact nomatch hh
   · exact nomatch hh
 
-/-- An accepted outcome forces the effect's shape: exactly one write, at
-    some address, of some byte list — and the branch body accepted it. -/
-private theorem eff_shape_ok {f : word → word → List byte → check_result}
-    {eff : SyscallEffect} {m' : Model} {evs : List event}
-    (H : (match eff with
-          | ⟨r, [(a, bs)], [], [], [], []⟩ => f r a bs
-          | _ => .CheckReject) = .CheckOk m' evs) :
-    ∃ r a bs, eff = ⟨r, [(a, bs)], [], [], [], []⟩ ∧ f r a bs = .CheckOk m' evs := by
-  obtain ⟨r, ws, zs, us, cs, ks⟩ := eff
-  split at H
-  · rename_i r' a' bs' heq
-    exact ⟨r', a', bs', heq, H⟩
-  · exact nomatch H
-
 /-- `bind` over the environment's `choose`: an accepted outcome names the
     chosen value and its evidence.  (`choose` has no inversion lemma, and
     the checker needs one in the accepted shape.) -/
@@ -333,3 +319,4 @@ example (i : SyscallInput) (m : Model) (eff : SyscallEffect)
     simp only [ho, Bool.not_false])]
 
 end LinuxSem.Checks.Sys.Kernel.Time.Time
+

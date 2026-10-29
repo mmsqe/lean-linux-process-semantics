@@ -84,7 +84,7 @@
   `node_x_sound_XMemcpy`.  That is 90 of the 92 declarations, and
   the file is silent under `lake env lean`.  spelling bridges were
   needed for part 5 and sit next to `Z_to_bv5_ten`: `Z_to_bv64_bv_unsigned`
-  (the `bv_unsigned` spelling of `AxSymExec3Sound.ofInt_toNat`), `Z_to_bv5_one`,
+  (the `bv_unsigned` spelling of `BvBase.ofInt_toNat`), `Z_to_bv5_one`,
   `Z_to_bv5_eleven`/`_twelve`/`_fourteen`/`_fifteen` (the `↑n` spellings the
   `w_reg_lit_sound` / `reg_of_ridx` conclusions use) and `wbytes_nth` (the
   `bv_unsigned`/`getD` restatement of the landed `wbytes_getD`); none of them
@@ -182,6 +182,7 @@ import LinuxSem.Common.CatExec
 import LinuxSem.Common.StoreOk
 import LinuxSem.Common.MemsetLib
 import LinuxSem.Common.RefMemcpyLib
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanPlanSoundSums
 
@@ -194,6 +195,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.BackingAlgebra
 open LinuxSem.Common.AxSymExec3Sound
@@ -896,19 +898,6 @@ theorem w_fresh_ok_parts (nx0 : Nat) (cs : acs) (H : fresh_ok nx0 cs = true) :
 
 /-! ### Readability of a storable range -/
 
-theorem find_segment_In (segs : List Segment) (a n : Int) (seg : Segment)
-    (H : find_segment segs a n = some seg) : seg ∈ segs := by
-  induction segs with
-  | nil => simp only [find_segment] at H; exact absurd H (by simp)
-  | cons s0 rest ih =>
-      simp only [find_segment] at H
-      split at H
-      · rename_i hc
-        injection H with hseg
-        subst hseg
-        exact List.mem_cons_self
-      · exact List.mem_cons_of_mem _ (ih H)
-
 /-- The one-byte read of a segment's static bytes. -/
 theorem segment_read_bytes_one (bytes : List String) (off : Nat) (b : byte)
     (H : segment_byte_at bytes off = some b) : segment_read_bytes bytes off 1 = some [b] := by
@@ -1099,77 +1088,6 @@ theorem SEALED_W_bytes : word_to_le_bytes 8 (Z_to_bv 64 SEALED_W) = SEALED_BYTES
   have h : bytes_le_to_Z (SEALED_BYTES.take 8) = SEALED_W := by decide
   rw [← h]
   exact word_to_le_bytes_of_bytes_n 8 (SEALED_BYTES.take 8) (by decide) (by omega)
-
-theorem kimg_cut_sound (segs : List Segment) (E : env) (M : word → Option byte)
-    (k : List kentry) (a n : Int) (HK : know_ok segs E M k) :
-    know_ok segs E M (kimg_cut k a n) := by
-  intro K' hK'
-  rw [kimg_cut, List.mem_flatMap] at hK'
-  obtain ⟨K, hK, hK'⟩ := hK'
-  have HKK : kentry_ok segs E M K := HK K hK
-  cases K with
-  | KImg lo hi =>
-    simp only [kimg_cut1] at hK'
-    by_cases hc : (hi ≤ a || a + n ≤ lo) = true
-    · rw [ite_eq_left hc] at hK'
-      obtain rfl : K' = kentry.KImg lo hi := by simpa using hK'
-      exact HKK
-    · have hhi : a < hi := by
-        by_cases h : hi ≤ a
-        · exact absurd (by simp [h]) hc
-        · omega
-      have hlo : lo < a + n := by
-        by_cases h : a + n ≤ lo
-        · exact absurd (by simp [h]) hc
-        · omega
-      have h1 : (hi ≤ a || a + n ≤ lo) = false := by
-        simp [show ¬(hi ≤ a) from by omega, show ¬(a + n ≤ lo) from by omega]
-      rw [ite_eq_right (by rw [h1]; simp)] at hK'
-      simp only [kentry_ok] at HKK
-      obtain ⟨Hlo, Hhi, Hnone⟩ := HKK
-      rw [List.mem_append] at hK'
-      rcases hK' with hK' | hK'
-      · by_cases hl : lo < a
-        · rw [ite_eq_left hl] at hK'
-          obtain rfl : K' = kentry.KImg lo a := by simpa using hK'
-          simp only [kentry_ok]
-          exact ⟨Hlo, by omega, fun i hi1 hi2 => Hnone i (by omega) (by omega)⟩
-        · rw [ite_eq_right hl] at hK'
-          simp at hK'
-      · by_cases hh : a + n < hi
-        · rw [ite_eq_left hh] at hK'
-          obtain rfl : K' = kentry.KImg (a + n) hi := by simpa using hK'
-          simp only [kentry_ok]
-          exact ⟨by omega, Hhi, fun i hi1 hi2 => Hnone i (by omega) (by omega)⟩
-        · rw [ite_eq_right hh] at hK'
-          simp at hK'
-  | KWord a' w v =>
-    rw [show K' = kentry.KWord a' w v by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KZero a' n' =>
-    rw [show K' = kentry.KZero a' n' by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KBlob a' n' k' =>
-    rw [show K' = kentry.KBlob a' n' k' by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KAlign e m =>
-    rw [show K' = kentry.KAlign e m by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KRange e lo hi =>
-    rw [show K' = kentry.KRange e lo hi by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KWr a' n' =>
-    rw [show K' = kentry.KWr a' n' by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KDisj a1 n1 a2 n2 =>
-    rw [show K' = kentry.KDisj a1 n1 a2 n2 by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KFill a' n' c =>
-    rw [show K' = kentry.KFill a' n' c by simpa [kimg_cut1] using hK']
-    exact HKK
-  | KUnk a' n' =>
-    rw [show K' = kentry.KUnk a' n' by simpa [kimg_cut1] using hK']
-    exact HKK
 
 /-! ### Knowledge tests -/
 
@@ -1984,9 +1902,9 @@ theorem call_core (SEGS : List Segment) (A : atable) (nx0 : Nat) (LIMIT : Int)
       rw [Ha]
       rfl
 /-- `Z_to_bv 64` round-trips `bv_unsigned`, in the `bv_unsigned` spelling of
-    `AxSymExec3Sound.ofInt_toNat` (spelling bridge). -/
+    `BvBase.ofInt_toNat` (spelling bridge). -/
 theorem Z_to_bv64_bv_unsigned (w : word) : Z_to_bv 64 (bv_unsigned w) = w :=
-  AxSymExec3Sound.ofInt_toNat w
+  ofInt_toNat w
 
 /-- `Z_to_bv 5 1 = 1` as a register index (`Z_to_bv 5 10 = 10` is
     `Z_to_bv5_ten` below; the `w_reg_*` lemmas state their index as
@@ -4726,3 +4644,5 @@ Lemma land_shl_disjoint : forall a b k, (0 <= a)%Z -> (0 <= k)%Z -> (0 <= b < 2 
 Lemma lor_shl_disjoint : forall a b k, (0 <= a)%Z -> (0 <= k)%Z -> (0 <= b < 2 ^ k)%Z ->
   Z.lor (a * 2 ^ k) b = (a * 2 ^ k + b)%Z.
 -/
+
+

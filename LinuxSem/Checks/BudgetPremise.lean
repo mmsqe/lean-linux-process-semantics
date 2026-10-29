@@ -775,15 +775,6 @@ theorem un_charges :
 theorem un_inplace_gate_passes :
     mremap_final_budget_b un_model 0x10000 4096 0x10000 12288 = true := by decide
 
-/-- The `region_free` readings the lemmas below need: freeness of an
-    appended ledger is freeness of its right half, and freeness survives
-    dropping an entry. -/
-theorem region_free_app_r (l1 l2 : List (word × word)) (lo n : word)
-    (H : region_free (l1 ++ l2) lo n = true) : region_free l2 lo n = true := by
-  apply region_free_intro
-  intro a sz Hin
-  exact region_free_In _ _ _ _ _ H (List.mem_append.mpr (Or.inr Hin))
-
 theorem region_free_map_remove (maps : List (word × word)) (old lo n : word)
     (H : region_free maps lo n = true) : region_free (map_remove maps old) lo n = true := by
   apply region_free_intro

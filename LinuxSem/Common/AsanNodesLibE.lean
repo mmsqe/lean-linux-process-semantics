@@ -68,12 +68,14 @@ import LinuxSem.Common.AsanAcctShape
 import LinuxSem.Common.AsanPlacement
 import LinuxSem.Common.BackingAlgebra
 import LinuxSem.Common.AsanCeil
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
 import LinuxSem.Common.AxSymExec3Sound
 import LinuxSem.Common.AxSymRun3
 import LinuxSem.Common.AsanPlanCore
 import LinuxSem.Common.AsanPlan
 import LinuxSem.Common.AsanPlanSound
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 set_option maxHeartbeats 1000000
@@ -83,6 +85,8 @@ set_option linter.unusedSimpArgs false
 set_option linter.unusedSectionVars false
 
 namespace LinuxSem.Common.AsanNodesLibE
+
+open LinuxSem.Common.SharedFacts (materialize_model_accesses_nil)
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -109,9 +113,9 @@ open LinuxSem.Common.Nodes
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AgentNodes
 open LinuxSem.Common.RefNodes
-open LinuxSem.Common.AsanAcct (materialize_model_accesses_nil)
 open LinuxSem.Common.AsanCeil
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymRun3
 open LinuxSem.Common.AsanPlanCore
 open LinuxSem.Common.AsanPlan
@@ -317,42 +321,6 @@ theorem stepacc_ecall_epend (segs : List Segment) (regs : BvMap word) (pc : word
   rw [HF]
   simp only [decode_exec_accesses, HE, ite_eq_left]
   rfl
-
-/-- An access-free instruction is a silent deterministic node on ANY model
-    (in particular with a non-empty lazy ledger: nothing is charged). -/
-theorem node_instr_noacc (segs : List Segment) (ms : machine_state) (model : Model)
-    (ms' : machine_state)
-    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = none)
-    (Hstep : step_accesses segs ms = .MachineOk (mkAccessReport ms' [])) :
-    node_ok segs (mkCfg ms model) Unit (fun _ => []) (fun _ => mkCfg ms' model) := by
-  have Hacc : mi_account_step segs ms model = .MachineOk (ms', model) := by
-    unfold mi_account_step
-    rw [Hstep]
-    dsimp only [mkAccessReport]
-    rw [materialize_model_accesses_nil]
-  constructor
-  · intro _
-    exact sstep.instr ms model ms' model Hh Hsvc Hacc
-  · intro e st hss
-    cases hss with
-    | instr ms0 model0 ms1 model1 hh hsvc hstep =>
-      rw [Hacc] at hstep
-      obtain ⟨rfl, rfl⟩ := hstep
-      exact ⟨(), rfl, rfl⟩
-    | instr_fault ms0 model0 hh hsvc hstep =>
-      rw [Hacc] at hstep; cases hstep
-    | instr_unmodeled ms0 model0 hh hsvc hstep =>
-      rw [Hacc] at hstep; cases hstep
-    | syscall ms0 model0 x8 eff m' m'' evs hh hsvc hspec hh' hmat =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | syscall_materialization_fault ms0 model0 x8 eff m' evs hh hsvc hspec hh' hmat =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | exit ms0 model0 x8 eff m' evs code hh hsvc hspec hh' hk =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | killed ms0 model0 x8 eff m' evs sig hh hsvc hspec hk =>
-      rw [Hsvc] at hsvc; cases hsvc
-    | syscall_unmodeled ms0 model0 x8 hh hsvc hspec =>
-      rw [Hsvc] at hsvc; cases hsvc
 
 /-- The `ecall` entry step, silently, for `realizes`. -/
 theorem rz_sys_lazy (segs : List Segment) (regs : BvMap word) (pc : word)
@@ -1583,3 +1551,5 @@ theorem cs_ok_refuse (segs : List Segment) (A : atable) (LIMIT : Int)
       (BitVec.ofInt 64 ENOMEM_RET) c_regs (by decide) rfl
   · rfl
   · exact c_know
+
+

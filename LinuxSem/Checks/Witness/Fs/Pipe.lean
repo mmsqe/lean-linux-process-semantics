@@ -137,7 +137,7 @@ private def portWmem : word → Option byte := fun _ => some 0
 /-- The model the checks run in: an empty fd table, an empty pipe table, an
     empty VM ledger, EOF on stdin and no halt. -/
 private def portModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A `pipe2` input: `fildes = 0x1000`, `flags = 0`. -/
 private def portInput : SyscallInput :=

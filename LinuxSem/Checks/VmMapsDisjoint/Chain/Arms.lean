@@ -67,6 +67,7 @@ open LinuxSem.Checks.ExecutableSpecs
 open LinuxSem.Checks.Sys.Prelude
 open LinuxSem.Checks.Sys.Dispatch
 open LinuxSem.Checks.VmMapsDisjoint
+open LinuxSem.Checks.Sys.Kernel.Signal
 
 namespace LinuxSem.Checks.VmMapsDisjoint
 

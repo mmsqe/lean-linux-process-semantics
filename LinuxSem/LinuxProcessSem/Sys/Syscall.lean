@@ -320,28 +320,39 @@ def nfds32 (n : word) : word := abi_low32 n
     one. -/
 def unfds32 (nfds : word) : word := abi_low32 nfds
 
+/-- `pselect6`'s `int nfds`, read as a signed 32-bit value: the low half of the
+    register, two's complement.  The spelling is the same as `sint32` below —
+    `BitVec.setWidth 32` then `BitVec.toInt` — so it reduces at a literal and
+    does not hand-roll the sign test.
+
+    The only term-level caller is `Sys.Fs.Select`'s `pselect_core`, reached
+    through the dispatcher's `nfds32` (`= abi_low32`), so every actual argument
+    has `toNat < 2^32` and the two spellings agree there.  They differ only for
+    an argument at or above `2^32` whose low half has bit 31 set, which the
+    dispatcher cannot produce; the older `let v : Int := (n32.toNat : Int)`
+    body read such a value as `v - 2^32 ≥ 0` instead of negative. -/
 def nfds_signed (n32 : word) : Int :=
-  let v : Int := (n32.toNat : Int)
-  if v < 2 ^ 31 then v else v - 2 ^ 32
+  (n32.setWidth 32).toInt
 
 /-- `socket`, `bind`, `listen`, `accept4` all take `int` arguments, and
     their range checks are SIGNED (`family < 0`, `protocol < 0`,
-    `addrlen < 0`).  `abi_low32` gives the unsigned low 32 bits; this
-    reads the same bits as a signed `int`.
+    `addrlen < 0`).  The register's low half is that `int`; this reads
+    those bits as a signed value.
 
-    THE LOW HALF IS COMPARED AS A `Nat` BEFORE IT IS READ AS AN `Int`,
-    and that shape is load-bearing rather than cosmetic.  Written the
-    other way round — `let u : Int := ((abi_low32 w).toNat : Int); if u <
-    2 ^ 31 then u else u - 2 ^ 32`, which is the same function — the
-    guard is `Int.decLt` on an `Int.ofNat` of a `BitVec.toNat`, and its
-    `whnf` does not terminate under a unifier: the wall `Checks/Cases`'
-    `sint32` note measures.  A `Nat` comparison reduces, so this spelling
-    can still be unfolded by `simp`/`rw`/`rfl` wherever a checker is
-    evaluated.  (`nfds_signed` above keeps the old shape: nothing
-    reduces it at a symbolic argument.) -/
-def sint32 (w : word) : Int :=
-  let n : Nat := (abi_low32 w).toNat
-  if n < 2 ^ 31 then (n : Int) else (n : Int) - 2 ^ 32
+    The definition is `BitVec.setWidth 32` followed by `BitVec.toInt`:
+    the narrowing is the `int` truncation the ABI applies, and `toInt`
+    is core's two's-complement reading of the resulting 32-bit vector.
+    Both are ordinary core definitions, so the function reduces to a
+    literal at a literal argument — `sint32 2 = 2` and
+    `sint32 (BitVec.ofInt 64 (-1)) = -1` are `rfl` — and no hand-rolled
+    two's complement is needed.  (An earlier spelling compared the low
+    half as a `Nat` first because a comparison on an `Int.ofNat` of a
+    `BitVec.toNat` would not `whnf` under a unifier; that obstruction
+    belonged to that spelling, not to this one.)  (`nfds_signed` above has
+    since taken the same spelling, so both read the low 32 bits as a
+    signed `int`; the dispatcher's `nfds32` narrows first, so no reachable
+    argument changes value.) -/
+def sint32 (w : word) : Int := (w.setWidth 32).toInt
 
 /-- rt_sigprocmask's `how` is `int`
     (`SYSCALL_DEFINE4(rt_sigprocmask, int, how, sigset_t __user *, nset,
@@ -390,6 +401,13 @@ example : sint32 (BitVec.ofInt 64 (-100)) = -100 := by decide
 
 /-- A small non-negative `int` is unchanged. -/
 example : sint32 5 = 5 := by decide
+
+/-- …and both readings are `rfl` in this spelling: `BitVec.setWidth` and
+    `BitVec.toInt` are core reductions, so the kernel closes them without
+    going through `decide`. -/
+example : sint32 2 = 2 := by rfl
+
+example : sint32 (BitVec.ofInt 64 (-1)) = -1 := by rfl
 
 /-- The signed `nfds` read is the same two's-complement reading as
     `sint32`, and, unlike `unfds32`, a bit-31-set low half is negative. -/

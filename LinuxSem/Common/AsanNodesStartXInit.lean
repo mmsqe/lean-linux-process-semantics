@@ -42,6 +42,7 @@
 
 import LinuxSem.Common.AsanNodesStartX
 import LinuxSem.Common.AsanInit
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanNodesStartXInit
 
@@ -55,6 +56,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3Sound
 open LinuxSem.Common.AsanPlanCore
 open LinuxSem.Common.AsanPlan

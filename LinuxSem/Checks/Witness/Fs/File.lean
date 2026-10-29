@@ -161,7 +161,7 @@ private def portFds : List (word × FdEntry) :=
     empty file system, EOF on stdin, no halt, and the default
     RLIMIT_NOFILE. -/
 private def portModel : Model :=
-  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A closed `oldfd` is -EBADF: the witness answers the spec's first arm. -/
 example : dup_witness 9 portModel = ret_outcome (errno_ret EBADF) portModel := by

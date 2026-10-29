@@ -81,6 +81,7 @@ import LinuxSem.Common.CatSim
 import LinuxSem.Common.MmapSim
 import LinuxSem.Common.ShapeAlg
 import LinuxSem.EquivalenceDefinition.Equivalence
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
@@ -101,6 +102,7 @@ open LinuxSem.EquivalenceDefinition
 open LinuxSem.EquivalenceDefinition.Equivalence
 
 namespace LinuxSem.Common.SrcShape
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 /-- The FP state at process entry, so that the [MmapSim]/[CatSim] lemmas
     (whose proofs go through [PropExec.mkst]) elaborate.  Same local

@@ -84,6 +84,7 @@ import LinuxSem.Common.WallSim
 import LinuxSem.Common.StreamExec
 import LinuxSem.Common.SimInv
 import LinuxSem.Checks.Sys.Fs.ReadWrite
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 set_option maxHeartbeats 1000000
@@ -93,6 +94,7 @@ set_option linter.unusedSimpArgs false
 set_option linter.unusedSectionVars false
 
 namespace LinuxSem.Common.StreamSim
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem

@@ -54,6 +54,7 @@
 -/
 import LinuxSem.Common.AsanPlanSound
 import LinuxSem.Common.AsanPlan
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanPlanSound2
 
@@ -66,6 +67,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.BackingAlgebra
 open LinuxSem.Common.AxSymExec3Sound
@@ -88,14 +90,6 @@ local instance asanplansound2_fx : PropExec.FPState := PropExec.fx0
 
 /-! ## Little-endian byte lemmas (`bytes_le_to_Z_cons`) -/
 
-/-- The `BvBase` byte recursion, one byte off the front. -/
-private theorem bytes_le_to_Nat_cons_aux (b : byte) (rest : List byte) :
-    bytes_le_to_Nat (b :: rest) = bytes_le_to_Nat rest * 256 + b.toNat := by
-  have hb : b.toNat < 2 ^ 8 := b.isLt
-  simp only [bytes_le_to_Nat]
-  rw [Nat.or_comm, ← Nat.shiftLeft_add_eq_or_of_lt (i := 8) hb]
-  simp [Nat.shiftLeft_eq]
-
 /-- A byte's unsigned value is below 256. -/
 private theorem byte_lt_256 (b : byte) : b.toNat < 256 := by
   have := b.isLt
@@ -106,23 +100,15 @@ private theorem byte_lt_256 (b : byte) : b.toNat < 256 := by
 theorem bytes_le_to_Z_cons (b : byte) (bs : List byte) :
     bytes_le_to_Z (b :: bs) = bv_unsigned b + bytes_le_to_Z bs * 256 := by
   unfold bytes_le_to_Z
-  rw [bytes_le_to_Nat_cons_aux]
+  rw [bytes_le_to_Nat_cons]
   simp only [Int.natCast_add, Int.natCast_mul, bv_unsigned]
   omega
 
 /-! ## `Z_to_le_bytes_to_Z` -/
 
-/-- The low byte of a `Nat`, as `Z_to_le_bytes` encodes it. -/
-private theorem toNat_ofInt_8_nat (m : Nat) :
-    (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
-  rw [BitVec.toNat_ofInt, Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
-  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
-  simp
-
-/-- `Z_to_le_bytes`'s shift, at a `Nat`-valued argument. -/
-private theorem int_shiftRight_8_natCast (m : Nat) :
-    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
-  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
+/- The low byte of a `Nat` as `Z_to_le_bytes` encodes it, and its `>>> 8`
+   shift, are the canonical `BvBase.toNat_ofInt_8_nat` and
+   `BvBase.int_shiftRight_8_natCast`, imported and opened here. -/
 
 /-- The byte `Z_to_le_bytes` emits first is the low byte. -/
 private theorem low_byte_of_add_mul (b : byte) (N : Nat) :
@@ -145,7 +131,7 @@ private theorem Z_to_le_bytes_to_Z_nat (bs : List byte) :
   induction bs with
   | nil => rfl
   | cons b rest ih =>
-    rw [List.length_cons, bytes_le_to_Nat_cons_aux]
+    rw [List.length_cons, bytes_le_to_Nat_cons]
     rw [Z_to_le_bytes]
     rw [int_shiftRight_8_natCast, div256_add_mul]
     rw [low_byte_of_add_mul]
@@ -296,7 +282,7 @@ theorem rdn_of_bytes1 (segs : List Segment) (M : word → Option byte) (n : Nat)
       have H0 := Hpt 0 (by omega)
       simp only [Int.natCast_zero, Int.add_zero, List.getD_cons_zero] at H0
       have H0' : rdn segs M a 1 = some [b] := by
-        rw [← AxSymExec3Sound.ofInt_toNat a]
+        rw [← ofInt_toNat a]
         exact H0
       cases n with
       | zero =>
@@ -421,3 +407,4 @@ theorem node_join_sound (segs : List Segment) (A : atable) (nx0 : Nat) (LIMIT : 
   · exact absurd Hn (by simp)
 
 end LinuxSem.Common.AsanPlanSound2
+

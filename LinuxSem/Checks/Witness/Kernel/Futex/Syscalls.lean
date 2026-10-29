@@ -49,11 +49,6 @@ open LinuxSem.LinuxProcessSem.Sys.Uapi (FUTEX_WAKE FUTEX_WAIT FUTEX_WAKE_PRIVATE
 open LinuxSem.LinuxProcessSem.Sys.Kernel.Futex.Syscalls
 open LinuxSem.Checks.Witness.Prelude
 
-/-- Two declarations named `abi_low32` are in scope here (see the note in
-    `Sys/Syscall.lean`), so the witness pins the `Syscall` one — the same
-    term `Sys.Kernel.Futex.Syscalls.futex_spec` applies to `val`. -/
-local notation "abi_low32" => LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32
-
 /-- The gate is written out for the third time; [Checks/Sys/Fs/Timerfd]
     says why the three layers restate it rather than share one
     predicate.

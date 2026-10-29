@@ -29,6 +29,7 @@
   - Word hygiene: this file contains no proof hole and no extra postulate.
 -/
 import LinuxSem.Common.AsanPlanCore
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanPlan
 
@@ -39,6 +40,7 @@ open LinuxSem.LinuxProcessSem.RiscvSemantics
 open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.AsanPlanCore
 

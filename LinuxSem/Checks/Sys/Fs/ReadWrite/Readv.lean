@@ -46,70 +46,6 @@ open LinuxSem.Checks.Sys.Uaccess
    their inverses are what the completeness directions take apart.
    ========================================================================= -/
 
-/-- The channel delivery stage at an arbitrary ledger. -/
-private theorem rv_stdin_deliver_ok (stdin : InputStream) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput) (m : Model) :
-    seqSpec (set_stdin stdin)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m
-      (.ok (mkEffect (len_word bs) writes []) (with_stdin stdin m)
-        (bs.map (event.ReadEv ch))) := by
-  refine ⟨(), with_stdin stdin m, [], bs.map (event.ReadEv ch), rfl, ?_, rfl⟩
-  refine ⟨(), with_stdin stdin m, bs.map (event.ReadEv ch), [], rfl, rfl, ?_⟩
-  simp
-
-/-- The socket delivery stage at an arbitrary ledger. -/
-private theorem rv_fds_deliver_ok (fds : List (word × FdEntry)) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput) (m : Model) :
-    seqSpec (set_fds fds)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m
-      (.ok (mkEffect (len_word bs) writes []) (with_fds fds m)
-        (bs.map (event.ReadEv ch))) := by
-  refine ⟨(), with_fds fds m, [], bs.map (event.ReadEv ch), rfl, ?_, rfl⟩
-  refine ⟨(), with_fds fds m, bs.map (event.ReadEv ch), [], rfl, rfl, ?_⟩
-  simp
-
-/-- Invert the channel delivery stage. -/
-private theorem rv_stdin_deliver_ok_inv (stdin : InputStream) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput) (m : Model)
-    (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (set_stdin stdin)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m (.ok eff m' evs)) :
-    eff = mkEffect (len_word bs) writes []
-      ∧ m' = with_stdin stdin m ∧ evs = bs.map (event.ReadEv ch) := by
-  obtain ⟨u, m1, ev1, ev2, h1, h2, h3⟩ := H
-  simp only [set_stdin, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
-  cases h1
-  obtain ⟨y, m2, ev3, ev4, h4, h5, h6⟩ := h2
-  cases h4
-  cases h5
-  simp only [List.nil_append, List.append_nil] at h3 h6
-  cases h6
-  cases h3
-  exact ⟨rfl, rfl, rfl⟩
-
-/-- Invert the socket delivery stage. -/
-private theorem rv_fds_deliver_ok_inv (fds : List (word × FdEntry)) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput) (m : Model)
-    (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (set_fds fds)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m (.ok eff m' evs)) :
-    eff = mkEffect (len_word bs) writes []
-      ∧ m' = with_fds fds m ∧ evs = bs.map (event.ReadEv ch) := by
-  obtain ⟨u, m1, ev1, ev2, h1, h2, h3⟩ := H
-  simp only [set_fds, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
-  cases h1
-  obtain ⟨y, m2, ev3, ev4, h4, h5, h6⟩ := h2
-  cases h4
-  cases h5
-  simp only [List.nil_append, List.append_nil] at h3 h6
-  cases h6
-  cases h3
-  exact ⟨rfl, rfl, rfl⟩
-
 /-- The delivered-prefix guard of a channel readv, at the
     spec's `choose` witness (`ret = len_word bs`, ledger = the canonical
     scatter of `bs`). -/
@@ -229,7 +165,7 @@ private theorem readv_imported_sound_ok (i : SyscallInput) (fd : word)
                         · rw [hret', hws']
                           dsimp only
                           rw [hsc]
-                          exact rv_stdin_deliver_ok _ ch expected bs i m
+                          exact seqSpec_set_stdin_deliver_writes _ ch expected bs i m
                       · rw [ite_eq_right hg] at H
                         exact nomatch H
                   | cons _ _ => try dsimp only at H; exact nomatch H
@@ -468,7 +404,7 @@ private theorem readv_imported_sound_ok (i : SyscallInput) (fd : word)
                           · rw [hret', hws']
                             dsimp only
                             rw [hsc]
-                            exact rv_fds_deliver_ok _ ch expected bs i m
+                            exact seqSpec_set_fds_deliver_writes _ ch expected bs i m
                         · rw [ite_eq_right hg] at H
                           exact nomatch H
                     | cons _ _ => try dsimp only at H; exact nomatch H
@@ -833,7 +769,7 @@ private theorem readv_imported_complete_ok (i : SyscallInput) (fd : word)
             | some writes =>
               simp only [hsc] at Hk
               obtain ⟨heff, hm', hevs⟩ :=
-                rv_stdin_deliver_ok_inv _ ch writes bs i m eff m' evs Hk
+                wv_stdin_deliver_writes_inv _ ch writes bs i m eff m' evs Hk
               subst heff
               subst hm'
               subst hevs
@@ -1020,7 +956,7 @@ private theorem readv_imported_complete_ok (i : SyscallInput) (fd : word)
               | some writes =>
                 simp only [hsc] at Hk
                 obtain ⟨heff, hm', hevs⟩ :=
-                  rv_fds_deliver_ok_inv _ ch writes bs i m eff m' evs Hk
+                  wv_fds_deliver_writes_inv _ ch writes bs i m eff m' evs Hk
                 subst heff
                 subst hm'
                 subst hevs
@@ -1545,3 +1481,7 @@ theorem check_readv_complete_unmodeled (i : SyscallInput) (fd iov iovcnt : word)
           try rfl
 
 end LinuxSem.Checks.Sys.Fs.ReadWrite
+
+
+
+

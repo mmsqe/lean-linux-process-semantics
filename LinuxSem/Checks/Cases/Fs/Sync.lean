@@ -49,6 +49,7 @@ import LinuxSem.Checks.Sys.Fs.Sync
 import LinuxSem.LinuxProcessSem.Sys.Fs.Sync
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
 import LinuxSem.LinuxProcessSem.Sys.Syscall
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -72,49 +73,9 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Fs.Sync
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed`: the signed value of a bitvector, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
-
-/-- `in_mem` as a function (a `SyscallInput` field projection). -/
-abbrev in_mem (i : SyscallInput) : word → Option byte := i.in_mem
-/-- `in_wmem` as a function. -/
-abbrev in_wmem (i : SyscallInput) : word → Option byte := i.in_wmem
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
-/-- `eff_writes` as a function. -/
-abbrev eff_writes (e : SyscallEffect) : List (word × List byte) := e.eff_writes
-/-- `eff_zeros` as a function. -/
-abbrev eff_zeros (e : SyscallEffect) : List (word × word) := e.eff_zeros
-/-- `eff_unmaps` as a function. -/
-abbrev eff_unmaps (e : SyscallEffect) : List (word × word) := e.eff_unmaps
-/-- `eff_copies` as a function. -/
-abbrev eff_copies (e : SyscallEffect) : List MemCopy := e.eff_copies
-/-- `eff_copyins` as a function. -/
-abbrev eff_copyins (e : SyscallEffect) : List (word × Nat) := e.eff_copyins
+/-! The Rocq spellings used below (`bv_unsigned`, `Z_to_bv`, …) are the shared transparent aliases of `LinuxSem.Common.RocqSpelling`. -/
 
 /-! * LinuxSem.Checks.Cases.Fs.Sync — worked examples over fsync (82), fdatasync (83)
 
@@ -130,7 +91,7 @@ def fsync_model : Model :=
     [ (0, FdEntry.FdChannel 0), (1, FdEntry.FdChannel 1), (2, FdEntry.FdChannel 2),
       (3, FdEntry.FdFile [102] 7), (4, FdEntry.FdFileW [103] 9), (5, FdEntry.FdDir) ]
     (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120]), ([103], [121])] none none none
+    [([102], [120]), ([103], [121])]
 
 /-! THE CHANNEL ARM ON fd 0.
 

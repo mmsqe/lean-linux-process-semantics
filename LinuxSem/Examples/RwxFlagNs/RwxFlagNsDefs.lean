@@ -445,3 +445,12 @@ theorem target_store_ok (m : word → Option byte) (a : word) (n : Nat)
   · simpa using Hhi
 
 end LinuxSem.Examples.RwxFlagNs
+
+namespace LinuxSem.Examples.RwxFlagNs.RwxFlagNsDefs
+
+theorem TD_10011a0 :
+    decodeAny 0x05d00893 = some (Instr.opImm .ADD 0x11#5 0x00#5 0x05d#12, 4) := by
+  decide
+
+end LinuxSem.Examples.RwxFlagNs.RwxFlagNsDefs
+

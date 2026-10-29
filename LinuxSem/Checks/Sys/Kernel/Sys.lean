@@ -1667,7 +1667,7 @@ theorem check_prlimit64_complete_unmodeled (i : SyscallInput) (pid resource new_
                   · rw [ite_eq_right hh] at H2
                     have Hcore := record_copyins_unmodeled_inv _ _ i m H2
                     exact absurd Hcore
-                      (seqSpec_modify_ret_only_no_unmodeled (with_rlimit_core nb)
+                      (seqSpec_modify_ret_only_never_unmodeled (with_rlimit_core nb)
                         (BitVec.ofInt 64 0) i m)
 
 /- =========================================================================

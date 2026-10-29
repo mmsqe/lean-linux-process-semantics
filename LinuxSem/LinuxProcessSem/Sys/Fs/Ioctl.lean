@@ -309,7 +309,7 @@ private def demoFds : List (word × FdEntry) :=
 /-- The model the checks run in: the fd table above, an empty VM ledger,
     an empty file system, EOF on stdin, no halt and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A syscall input for `ioctl` (29).  The spec reads none of it; it is
     here because a `SysSpec` is a relation on an input as well as a

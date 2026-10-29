@@ -165,6 +165,7 @@ open LinuxSem.Common.CatSim (apply_effect_no_write apply_effect_copyins_no_write
   buf_modeled bufs_modeled bufs_modeled_single
   buf_modeled_nil buf_modeled_skipn write1_ok_n write1_ok_inv write1_no_unmodeled
   sstep_write_inv sstep_write_next_inv)
+open LinuxSem.Common.CatExec
 
 variable [fx : FPState]
 
@@ -904,18 +905,6 @@ theorem adv_munmap (regs : BvMap word) (pc : word) (sv : Option word)
   have h10 : bv_eqb (10 : reg) 0 = false := bv_eqb_neq _ _ (by decide)
   simp only [apply_effect, advance_past_svc, RiscvSemantics.set_reg, ms_pc, h10,
     apply_copies, hm, Bool.false_eq_true, reduceIte, mkst, regupd, b_npc4]
-
-/-- The reissued write at the raw ecall post-state: advance past the svc
-    after writing the (dead) syscall return to x10. -/
-theorem adv_set (regs : BvMap word) (pc : word) (sv : Option word)
-    (mem rom : word → Option byte) (v : word) :
-    advance_past_svc (set_gpr0
-      { ms_regs := regs, ms_fregs := fx.fp_regs, ms_pc_val := pc, ms_svc_pending := sv,
-        ms_resv := none, ms_fcsr := fx.fp_csr, ms_mem := mem, ms_rom := rom } v)
-    = mkst (regupd regs 10 v) (v_addi pc 4) mem rom := by
-  have h10 : bv_eqb (10 : reg) 0 = false := bv_eqb_neq _ _ (by decide)
-  simp only [advance_past_svc, set_gpr0, RiscvSemantics.set_reg, ms_pc, h10,
-    Bool.false_eq_true, reduceIte, mkst, regupd, b_npc4]
 
 /- =========================================================================
    twm: writes/munmap/exit straight line, model threaded
@@ -2111,3 +2100,5 @@ theorem step_sb_at (segs : List Segment) (regs : BvMap word) (pc : word)
     rw [Ha]; exact Hok
   rw [step_sb_any segs regs pc mem rom w rs1 rs2 imm Hfetch Hecall Hdecode hok]
   simp only [Ha, Hv, Hb]
+
+

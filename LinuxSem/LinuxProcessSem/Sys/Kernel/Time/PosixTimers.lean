@@ -886,7 +886,7 @@ private def demoInput (w : word → Option byte) : SyscallInput :=
     stdin, empty file system, no halt, no rlimit, and — `mkModel`'s
     origin — a clock reading 0. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A model whose recorded `CLOCK_MONOTONIC` reading is `t` nanoseconds. -/
 private def clockModel (t : Int) : Model :=

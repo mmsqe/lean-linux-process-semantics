@@ -188,25 +188,6 @@ theorem mremap_fresh_neq_old (m : Model) (old_nZ new_nZ : Int)
     checker's goal to the concrete effect the arm produced.  They add no
     public surface. -/
 
-/-- The injected errno, inverted: an errno from the injectable set with no
-    ledger at all. -/
-private theorem errno_from_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
-    (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : LinuxSem.LinuxProcessSem.bind (errno_from es)
-      (fun e => err_ret e) i m (.ok eff m' evs)) :
-    ∃ e, e ∈ es ∧ eff = mkEffect (errno_ret e) [] [] ∧ m' = m ∧ evs = [] := by
-  obtain ⟨e, m1, evs1, evs2, hc, hk, hevs⟩ := H
-  unfold errno_from choose at hc
-  obtain ⟨e0, hmem, hok⟩ := hc
-  simp only [Outcome.ok.injEq] at hok
-  obtain ⟨rfl, rfl, rfl⟩ := hok
-  simp only [err_ret, ret_only, LinuxSem.LinuxProcessSem.pure,
-    Outcome.ok.injEq] at hk
-  obtain ⟨heff, hm, hevs2⟩ := hk
-  subst hevs2
-  refine ⟨e, hmem, heff, hm, ?_⟩
-  simpa using hevs
-
 /-- The in-place resolution (a shrink or an in-place grow), inverted: the
     spec's effect verbatim, the model stepped to `mremap_model_next`, and
     no events. -/
@@ -273,15 +254,6 @@ private theorem move_ok_inv (m : Model) (old old_n new_n : word)
   rw [hevs2] at hevs
   refine ⟨dst, hfresh, heff, hm, ?_⟩
   simpa using hevs
-
-/-- `unmodeled` is not an `ok` outcome — the shape every inverted spec arm
-    rules out when the spec is asked for an `unmodeled` answer.  (Stated as
-    a simp rule because the arms above are `bind chains of `choose` /
-    `modify` / `pure`, whose `unmodeled` case is exactly this equality.) -/
-private theorem unmodeled_ne_ok {A M E : Type} (x : A) (m : M) (evs : List E) :
-    (Outcome.unmodeled : Outcome A M E) ≠ .ok x m evs := by
-  intro h
-  exact nomatch h
 
 /-! ## The four agreement theorems -/
 
@@ -648,7 +620,7 @@ theorem check_mremap_complete_ok (old old_size new_size flags : word) (eff : Sys
             -- a source address below `alloc_top` is never an encoded errno
             have hold_nonneg : 0 ≤ old_nZ := by
               rw [← hOldN]
-              exact page_round_up_Z_nonneg' _ (word_unsigned_range old_size).1
+              exact page_round_up_Z_nonneg' _ (bv_unsigned_range_u64 old_size).1
             have hold_errno : errno_ret_in mremap_errnos old = false :=
               mremap_source_ret_not_errno (m_vmmaps m) old old_n old_nZ hold_nonneg hsource
             have hold_notin : ¬ (errno_ret_in mremap_errnos old = true) := by
@@ -732,7 +704,7 @@ theorem check_mremap_complete_ok (old old_size new_size flags : word) (eff : Sys
                       move_ok_inv m old old_n new_n old_nZ new_nZ eff m' evs i hmove
                     have hnew_nonneg : 0 ≤ new_nZ := by
                       rw [← hNewN]
-                      exact page_round_up_Z_nonneg' _ (word_unsigned_range new_size).1
+                      exact page_round_up_Z_nonneg' _ (bv_unsigned_range_u64 new_size).1
                     have hdst_errno : errno_ret_in mremap_errnos dst = false :=
                       mremap_fresh_ret_not_errno m old_nZ new_nZ old old_n dst new_n
                         hnew_nonneg hfresh
@@ -880,3 +852,5 @@ example (eff : SyscallEffect) (m : Model) :
   rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_left (by decide)]
 
 end
+
+

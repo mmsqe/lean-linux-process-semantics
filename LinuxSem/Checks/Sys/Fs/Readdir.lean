@@ -29,8 +29,9 @@
 
   `getdents64_spec` is a `SysSpec`, a FUNCTION, so its body is an
   `if`/`match` at function type; Lean normalises such a goal by trying to
-  decide `getdents64_no_room count`, whose `sint32` is opaque and whose
-  reduction does not bottom out.  Each proof therefore starts by
+  decide `getdents64_no_room count`, whose `sint32` is opaque and does not
+  reduce far enough for the guard to be decided (it ran out of recursion
+  depth under the earlier `sint32` body).  Each proof therefore starts by
   `generalize`-ing its conclusion into a local `Q : Prop` and case-splits
   against `Q` (an opaque variable, so no reduction happens), rewriting `Q`
   back into the spec at the leaves with `rw [← hP]` — the same device
@@ -352,7 +353,7 @@ private def demoFds : List (word × FdEntry) :=
 /-- The model the checks run in: the fd table above, an empty VM ledger,
     an empty file system, EOF on stdin, no halt and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A closed fd is -EBADF, and it is the fd lookup that decides: no
     object is examined at all. -/

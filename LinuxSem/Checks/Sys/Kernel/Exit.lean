@@ -296,7 +296,7 @@ theorem check_wait4_complete_unmodeled (i : SyscallInput) (upid stat_addr option
 /-- A model whose process has no child — `mkModel`'s default, which is the
     one state `wait4` answers. -/
 private def port_model : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The same model after the creating arm: `with_children`, which is what
     `Kernel.Fork.clone_resolve` applies on its success branch. -/

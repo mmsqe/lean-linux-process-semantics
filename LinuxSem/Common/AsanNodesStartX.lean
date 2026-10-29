@@ -58,6 +58,7 @@ import LinuxSem.Common.AsanPlanCore
 import LinuxSem.Common.AsanNodesAux
 import LinuxSem.Common.AsanStartLoops
 import LinuxSem.Common.RefLayout
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanNodesStartX
 
@@ -71,6 +72,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.BackingAlgebra
 open LinuxSem.Common.AxSymExec3Sound
@@ -456,7 +458,7 @@ theorem x_sound_envscan (segs : List Segment) (A : atable) (nx0 : Nat) (LIMIT : 
     have hE : edenot E e_envp = Z_to_bv 64 (EA sp argv) := by
       rw [show edenot E e_envp
         = Z_to_bv 64 (bv_unsigned (edenot E e_envp)) from
-        (AxSymExec3Sound.ofInt_toNat _).symm, V1']
+        (ofInt_toNat _).symm, V1']
     have h9' : getr R (9 : reg) = Z_to_bv 64 (EA sp argv + 8 * (0 : Int)) := by
       rw [show (9 : reg) = Z_to_bv 5 ((9 : Nat) : Int) from by decide, H9, H9e, hE,
         show EA sp argv + 8 * (0 : Int) = EA sp argv from by omega]
@@ -657,7 +659,7 @@ theorem x_sound_pnscan (segs : List Segment) (A : atable) (nx0 : Nat) (LIMIT : I
           obtain ⟨V1, V2, V3⟩ := SINV_vals E FULL HS
           have V3' : edenot E e_str0 = Z_to_bv 64 (STR0 sp argv envp) := by
             rw [show edenot E e_str0 = Z_to_bv 64 (bv_unsigned (edenot E e_str0)) from
-              (AxSymExec3Sound.ofInt_toNat _).symm,
+              (ofInt_toNat _).symm,
               show bv_unsigned (edenot E e_str0) = STR0 sp argv envp from V3]
           obtain ⟨hp0, hp8⟩ := ptr_bounds A HULL_ok p Hlo Hhi
           obtain ⟨hpn0, hpn2⟩ := STR0_bounds sp argv envp Hva Hve Hsp_lo Hsp_hi

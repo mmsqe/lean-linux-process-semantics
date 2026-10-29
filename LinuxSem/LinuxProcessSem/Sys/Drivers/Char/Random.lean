@@ -166,35 +166,9 @@ def getrandom_spec (buf buflen flags : word) : SysSpec SyscallEffect :=
   answered -EINVAL — fail closed, see the flags note), the delivered
   bytes shape, the zero-byte shape, the two errnos, and the count gate. -/
 
-/-- `input` at the head of a chain binds the incoming input and steps
-    nothing — `Monad.bind_getModel`'s counterpart for `Monad.input`.  A
-    port helper (this file reuses no lemmas), used by the checks
-    below to see past the spec's `i <- input`. -/
-private theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m2 evs =>
-      simp only [bind, inputSpec, input]
-      constructor
-      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-        simp only [Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        simp at h3
-        subst h3
-        exact h2
-      · intro h
-        exact ⟨i, m, [], evs, rfl, h, rfl⟩
-  | unmodeled =>
-      simp only [bind, inputSpec, input]
-      constructor
-      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
-        · exact absurd h (by simp)
-        · simp only [Outcome.ok.injEq] at h1
-          obtain ⟨rfl, rfl, rfl⟩ := h1
-          exact h2
-      · intro h
-        exact Or.inr ⟨i, m, [], rfl, h⟩
+-- The checks below see past the spec's `i <- input` with the canonical
+-- `MonadInstances.bind_inputSpec` (`Monad.bind_getModel`'s input twin);
+-- this file no longer restates it.
 
 /-- The injectable set is one errno wide, and it is `EINTR`. -/
 example : getrandom_errnos = [EINTR] := rfl
@@ -228,7 +202,7 @@ private def demoInputNone : SyscallInput :=
     reads the model not at all (it reads the INPUT and the environment),
     so any model serves. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The destination walk the checks below rewrite through: at `demoInput`
     every address in a range holds a byte, so a range is always

@@ -73,7 +73,8 @@ import LinuxSem.EquivalenceDefinition.Measure
 import LinuxSem.EquivalenceDefinition.OmniEquivalence
 import LinuxSem.EquivalenceDefinition.PatchClassifySpec
 import LinuxSem.EquivalenceDefinition.GatedSize
-import LinuxSem.Common.ListFacts
+import LinuxSem.Common.RocqSpelling
+import LinuxSem.Common.SharedFacts
 import LinuxSem.Common.SpecConsts
 import LinuxSem.Common.Footprint
 import LinuxSem.Common.NumPrint

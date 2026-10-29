@@ -35,66 +35,20 @@ open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Kernel.Time.PosixTimers
 open LinuxSem.Checks.Witness.Prelude
 
-/-! ## The byte round trip (helpers stated here)
+/-! ## The byte round trip (the inverse the witness consumes)
 
     [clock_gettime_bytes_ns] needs [bytes_le_to_Z]'s inverse: reading the
     little-endian bytes of a non-negative value back gives that value.
-    `BvBase.bytes_le_to_Z_of_le_bytes` is the general statement —
-    `BvBase.lean` proves it from the `Nat` byte recursion — and
-    `Sys/Uapi.lean` proves the 64-bit instance it needs privately.  The
-    same instance at an arbitrary width is proved here the same way — from
-    the byte recursion alone, at the shape the local witness proof
-    consumes — rather than by casting the general `Int` statement.  These
-    helpers are `private` on purpose: they serve this file's proof and add
-    no public surface. -/
+    `BvBase.bytes_le_to_Z_of_le_bytes` is the general statement, proved
+    there from the `Nat` byte recursion, and
+    `BvBase.bytes_le_to_Nat_Z_to_le_bytes` is the public `Nat` round trip it
+    rests on.  What stays local, and `private`, is the same inverse at the
+    shape the witness proof consumes. -/
 
-/-- Splitting one byte off the front of a little-endian read: the byte is
-    the low eight bits and the rest is shifted up by eight. -/
-private theorem bytes_le_to_Nat_cons (b : byte) (rest : List byte) :
-    bytes_le_to_Nat (b :: rest) = bytes_le_to_Nat rest * 256 + b.toNat := by
-  have hb : b.toNat < 2 ^ 8 := b.isLt
-  simp only [bytes_le_to_Nat]
-  rw [Nat.or_comm, ← Nat.shiftLeft_add_eq_or_of_lt (i := 8) hb]
-  simp [Nat.shiftLeft_eq]
-
-/-- One limb of the modulus arithmetic below. -/
-private theorem mod_mul_256_of (q r M : Nat) (hr : r < 256) (hM : 0 < M) :
-    (256 * q + r) % (256 * M) = 256 * (q % M) + r := by
-  have hqM : q % M < M := Nat.mod_lt _ hM
-  have hrM : r < 256 * M := by omega
-  rw [Nat.add_mod, Nat.mul_mod_mul_left, Nat.mod_eq_of_lt hrM, Nat.mod_eq_of_lt (by omega)]
-
-private theorem mod_mul_256 (x M : Nat) (hM : 0 < M) :
-    x % (256 * M) = 256 * ((x / 256) % M) + x % 256 := by
-  have h := mod_mul_256_of (x / 256) (x % 256) M (Nat.mod_lt _ (by decide)) hM
-  rwa [Nat.div_add_mod] at h
-
-/-- `Z_to_le_bytes`'s shift, at a `Nat`-valued argument. -/
-private theorem int_shiftRight_8_natCast (m : Nat) :
-    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
-  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
-
-/-- The low byte of a `Nat`, as `Z_to_le_bytes` encodes it. -/
-private theorem toNat_ofInt_8_nat (m : Nat) :
-    (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
-  rw [BitVec.toNat_ofInt, Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
-  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
-  simp
-
-/-- The round trip: reading back `k` little-endian bytes of `m` gives `m`
-    truncated to `8k` bits. -/
-private theorem bytes_le_to_Nat_Z_to_le_bytes (k m : Nat) :
-    bytes_le_to_Nat (Z_to_le_bytes k (m : Int)) = m % 2 ^ (8 * k) := by
-  induction k generalizing m with
-  | zero => simp [Z_to_le_bytes, bytes_le_to_Nat, Nat.mod_one]
-  | succ k ih =>
-    rw [Z_to_le_bytes, int_shiftRight_8_natCast m]
-    rw [bytes_le_to_Nat_cons, ih (m / 256), toNat_ofInt_8_nat]
-    have hM : 0 < 2 ^ (8 * k) := Nat.two_pow_pos _
-    rw [show 8 * (k + 1) = 8 * k + 8 by omega, Nat.pow_add]
-    rw [Nat.mul_comm (2 ^ (8 * k)) (2 ^ 8)]
-    rw [show 2 ^ 8 = 256 by decide, mod_mul_256 m (2 ^ (8 * k)) hM]
-    omega
+/- The two facts `Z_to_le_bytes` needs — `((m : Int) >>> 8) = ((m / 256 : Nat) :
+   Int)` and `(BitVec.ofInt 8 (m : Int)).toNat = m % 256` — are `BvBase`'s
+   `int_shiftRight_8_natCast` and `toNat_ofInt_8_nat`, reached through the `open
+   LinuxSem.LinuxProcessSem` above. -/
 
 /-- The inverse of [Z_to_le_bytes] at a non-negative value: reading back
     the `8n` little-endian bytes of `z` returns `z`, provided `z` fits in
@@ -319,3 +273,7 @@ example : clock_gettime_bytes 1500000000
 example : (clock_gettime_bytes 123456789).length = 16 := by decide
 
 end LinuxSem.Checks.Witness.Kernel.Time.PosixTimers
+
+
+
+

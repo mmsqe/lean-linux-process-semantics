@@ -27,8 +27,9 @@
   have no direct counterpart here: an `alt`/`choose`/`seqSpec` body
   produces existentials and disjunctions, and `if`/`match` terms only
   reduce once their scrutinee is decided.  Those steps are named and proved
-  once in the section that follows the checkers, and the four theorems that
-  need them cite them.  They add no public surface.
+  once — the two `seqSpec (modifySpec f)` / `ret_only` inversions in
+  `Checks.Sys.Prelude`, the rest in the section that follows the checkers —
+  and the four theorems that need them cite them.
 -/
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Fork
@@ -69,30 +70,6 @@ def check_set_tid_address (eff : SyscallEffect) (m : Model)
    None of them leaves this file, and each is used by a proof that would
    otherwise write the whole chain out.
    ========================================================================= -/
-
-/-- Invert one `seqSpec (modifySpec f) (ret_only r)` step: the effect is
-    the single return [r], the model is [f m], and nothing is emitted. -/
-theorem seqSpec_modify_ret_only_inv (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (modifySpec f) (ret_only r) i m (.ok eff m' evs)) :
-    eff = mkEffect r [] [] ∧ m' = f m ∧ evs = [] := by
-  obtain ⟨u, m2, evs1, evs2, hm, hr, hevs⟩ := H
-  cases hm
-  cases hr
-  simp only [List.nil_append] at hevs
-  exact ⟨rfl, rfl, hevs⟩
-
-/-- …and that the same step never declines: both halves are a state write
-    and a `pure`. -/
-theorem seqSpec_modify_ret_only_no_unmodeled (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) :
-    ¬ seqSpec (modifySpec f) (ret_only r) i m .unmodeled := by
-  intro H
-  rcases H with h | ⟨u, m1, evs1, h, hk⟩
-  · simp only [modifySpec, LinuxSem.LinuxProcessSem.modify] at h
-    exact nomatch h
-  · simp only [ret_only, LinuxSem.LinuxProcessSem.pure] at hk
-    exact nomatch hk
 
 /-- An environment choice always answers. -/
 theorem choose_no_unmodeled {A : Type} (P : A → Prop) (i : SyscallInput)
@@ -145,7 +122,7 @@ theorem set_tid_address_spec_no_unmodeled (i : SyscallInput) (m : Model) :
       simp only [Outcome.ok.injEq] at heq
       obtain ⟨hx, hm1, hevs1⟩ := heq
       subst x; subst m1; subst evs1
-      exact absurd hk (seqSpec_modify_ret_only_no_unmodeled (with_tid y) y i m)
+      exact absurd hk (seqSpec_modify_ret_only_never_unmodeled (with_tid y) y i m)
 
 theorem check_set_tid_address_sound_ok (eff : SyscallEffect) (m m' : Model)
     (evs : List event) (i : SyscallInput)
@@ -466,7 +443,7 @@ theorem check_clone_resolve_complete_unmodeled (m : Model) (i : SyscallInput)
         simp only [Outcome.ok.injEq] at heq
         obtain ⟨hx, hm1, hevs1⟩ := heq
         subst p; subst m1; subst evs1
-        exact absurd hk (seqSpec_modify_ret_only_no_unmodeled with_children p0 i m)
+        exact absurd hk (seqSpec_modify_ret_only_never_unmodeled with_children p0 i m)
 
 /-! ## The resolution with a ledger (clone3) -/
 
@@ -870,3 +847,5 @@ example :
   rw [ite_eq_left (by decide)]
 
 end LinuxSem.Checks.Sys.Kernel.Fork
+
+

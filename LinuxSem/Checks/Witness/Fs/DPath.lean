@@ -68,7 +68,7 @@ theorem getcwd_witness_ok (size : word) (i : SyscallInput) (m : Model) :
     system, EOF on stdin, no halt and no rlimit.  Nothing in it can
     matter to getcwd — the spec never looks at the model. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- `getcwd(NULL, 0)` is -ERANGE: the deterministic arm the kernel
     reaches after the whole path has been assembled and found not to

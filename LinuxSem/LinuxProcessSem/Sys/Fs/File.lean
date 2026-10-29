@@ -34,9 +34,10 @@
   `modifySpec (with_fds …)` — the same state update, one unfolding
   further out.
 
-  `Z.ldiff a b` is `a & ~b`; `Sys/Uapi.lean`
-  ports `Z.lor` and `Z.land` but not this one, so a helper is added below
-  where the only caller needs it.  Nothing else in the file uses it.
+  `Z.ldiff a b` is `a & ~b`; `Sys/Uapi.lean` ports `Z.lor`, `Z.land` and
+  `Z.ldiff` together, and the `z_ldiff` below is a transparent alias to
+  the canonical definition there, kept so the one caller in this file
+  (`dup3_flags_ok`) reads by the local name.
 -/
 import LinuxSem.LinuxProcessSem.MonadInstances
 import LinuxSem.LinuxProcessSem.StateLedger
@@ -229,15 +230,18 @@ def dup_spec (oldfd : word) : SysSpec SyscallEffect :=
 /-! ## `Z.ldiff` over `Int`
 
     Lean's core `Int` library has no bitwise and/or/and-not (see
-    `Sys/Uapi.lean`, which ports `Z.lor` and `Z.land` through `Nat`), and
-    `dup3_flags_ok` is the one place in this file that needs
-    `Z.ldiff a b = a & ~b`.  The operands are non-negative there
-    (`flag32 flags` is a 32-bit value and `O_CLOEXEC` is a literal), and
-    on those `a & ~b` clears exactly the bits of `b` from `a`, i.e.
-    `a - (a & b)`. -/
+    `Sys/Uapi.lean`, which ports `Z.lor`, `Z.land` and `Z.ldiff` through
+    `Nat`), and `dup3_flags_ok` is the one place in this file that needs
+    `Z.ldiff a b = a & ~b`.  The definition IS `Uapi.z_ldiff`, a
+    transparent alias below, whose body is `a - (a & b)`.  The operands
+    are non-negative there (`flag32 flags` is a 32-bit value and
+    `O_CLOEXEC` is a literal), and on those `a & ~b` clears exactly the
+    bits of `b` from `a`, i.e. `a - (a & b)` — which is why the two
+    spellings agree on every call this file makes. -/
 
-/--  `Z.ldiff` (bitwise "`a` and not `b`"), through `Nat`. -/
-def z_ldiff (a b : Int) : Int := a - z_land a b
+/--  `Z.ldiff` (bitwise "`a` and not `b`") — `Sys.Uapi.z_ldiff`, the
+    canonical definition, as a transparent alias. -/
+abbrev z_ldiff (a b : Int) : Int := LinuxSem.LinuxProcessSem.Sys.Uapi.z_ldiff a b
 
 /-- `(flags & ~O_CLOEXEC) == 0` — `ksys_dup3`'s first test, on the
     TRUNCATED word.
@@ -526,7 +530,7 @@ private def demoFds : List (word × FdEntry) :=
     empty file system, EOF on stdin, no halt and the default
     RLIMIT_NOFILE (1024). -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The same table with fd 1 closed — the header's own example: after
     `close(1)` the next descriptor handed out is 1 again. -/
@@ -536,7 +540,7 @@ private def demoHoleFds : List (word × FdEntry) :=
    (5, FdEntry.FdDevNull true false)]
 
 private def demoHoleModel : Model :=
-  mkModel demoHoleFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoHoleFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A syscall input for `dup`/`dup3`.  Neither spec reads it; it is here
     because a `SysSpec` is a relation on an input as well as a model. -/
@@ -814,5 +818,18 @@ example :
   rw [ite_eq_left (by decide :
     ((!(dup3_flags_ok (BitVec.ofInt 64 4294967297))) = true))]
   simp only [err_ret, ret_only, pure]
+
+
+/-- THE -EMFILE ALTERNATIVE, stated rather than evaluated: when the
+    allocator's answer is already taken — the 4096-candidate scan
+    exhausted — `lowest_fd` has no success outcome at all, so the only
+    answer left is the errno arm's, and `get_unused_fd_flags` carries
+    -EMFILE as its only one.  This is `File.lowest_fd_occupied`, cited
+    rather than reproved; the EventFd arm declines the whole path, so the
+    errno must not appear here. -/
+theorem lowest_fd_at_limit (fds : List (word × FdEntry)) (i : SyscallInput)
+    (m : Model) (o : Outcome word Model event)
+    (h : fd_lookup fds (alloc_fd fds) ≠ none) : ¬ lowest_fd fds i m o :=
+  lowest_fd_occupied fds i m o h
 
 end LinuxSem.LinuxProcessSem.Sys.Fs.File

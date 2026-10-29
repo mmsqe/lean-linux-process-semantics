@@ -125,13 +125,6 @@ theorem check_rt_sigaction_frame (i : SyscallInput) (sig act oact ss : word) (ef
     m_vmmaps m' = m_vmmaps m := by
   vm_frame eff H LinuxSem.Checks.Sys.Kernel.Signal.check_rt_sigaction LinuxSem.Checks.Sys.Prelude.check_ret_only
 
-set_option maxHeartbeats 1000000 in
-/-- `tgkill`'s frame.  `check_send_sigabrt` / `check_tkill_self` are the
-    two delivery shapes; both only append to the pending-signal list. -/
-theorem check_tgkill_frame (tgid pid sig : word) (eff : SyscallEffect) (m m' : Model) (evs : List event)
-    (H : check_tgkill tgid pid sig eff m = .CheckOk m' evs) :
-    m_vmmaps m' = m_vmmaps m := by
-  vm_frame eff H LinuxSem.Checks.Sys.Kernel.Signal.check_tgkill LinuxSem.Checks.Sys.Prelude.check_ret_only LinuxSem.Checks.Sys.Kernel.Signal.check_send_sigabrt LinuxSem.Checks.Sys.Kernel.Signal.check_tkill_self
 
 
 end LinuxSem.Checks.VmMapsDisjoint

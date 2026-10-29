@@ -54,6 +54,7 @@ open LinuxSem.Common.StepTac
 open LinuxSem.Common.StoreOk
 open LinuxSem.Common.StreamSim
 open LinuxSem.Common.MemSplit
+open LinuxSem.LinuxProcessSem.Sys.Uapi (mod_mul_256_of mod_mul_256)
 
 set_option maxRecDepth 10000
 set_option linter.unusedVariables false
@@ -113,35 +114,6 @@ theorem getr_empty (r : reg) : getr (bvmap_empty : BvMap word) r = BitVec.ofInt 
 /-! =================================================================
     Bit-level value facts
     ================================================================= -/
-
-/-- the bits of
-    the high mask `2^64 - 2^j` are exactly the positions `j <= i < 64`. -/
-theorem testbit_mask_nat (j i : Nat) (hj : j ≤ 64) :
-    Nat.testBit (2 ^ 64 - 2 ^ j) i = (decide (j ≤ i) && decide (i < 64)) := by
-  have h2 : 2 ^ j * 2 ^ (64 - j) = 2 ^ 64 := by
-    rw [← Nat.pow_add]
-    congr 1
-    omega
-  have hm : 2 ^ 64 - 2 ^ j = 2 ^ j * (2 ^ (64 - j) - 1) := by
-    rw [Nat.mul_sub_left_distrib, Nat.mul_one, h2]
-  rw [hm, Nat.testBit_two_pow_mul, Nat.testBit_two_pow_sub_one]
-  by_cases hji : j ≤ i
-  · have hd : decide (i - j < 64 - j) = decide (i < 64) := by
-      rcases Nat.lt_or_ge i 64 with h | h
-      · simp [h, show i - j < 64 - j from by omega]
-      · simp [h, show ¬ (i - j < 64 - j) from by omega]
-    simp [hji, hd]
-  · simp [hji]
-
-/-- bits at or above `j` do not
-    see the low part `r < 2^j`. -/
-theorem testbit_drop_low (q r j i : Nat) (hr : r < 2 ^ j) (hji : j ≤ i) :
-    Nat.testBit (q * 2 ^ j + r) i = Nat.testBit (q * 2 ^ j) i := by
-  have hsum : q * 2 ^ j + r = 2 ^ j * q + r := by rw [Nat.mul_comm q (2 ^ j)]
-  have hmul : q * 2 ^ j = 2 ^ j * q := by rw [Nat.mul_comm q (2 ^ j)]
-  rw [hsum, hmul, Nat.testBit_two_pow_mul_add (a := q) (b := r) (i := j) hr i,
-    ite_eq_right (by omega), Nat.testBit_two_pow_mul]
-  simp [hji]
 
 /-- masking with
     `2^64 - 2^j` clears the low `j` bits, i.e. rounds `x` down to a multiple
@@ -311,23 +283,6 @@ theorem bv_swrap_emod (n : Nat) (z : Int) (k : Int)
   rw [hA, hH, Int.sub_zero, Int.emod_emod, Int.add_emod, hH, Int.add_zero,
     Int.emod_emod]
 
-/-- a value below the half modulus is
-    fixed.  The bound `1 <= n` is this tree's `bv_swrap`-at-`0` caveat
-    (`bv_swrap 0 z = -1`,); every call site below has
-    `n >= 1`. -/
-theorem bv_swrap_small (n : Nat) (hn : 1 ≤ n) (z : Int)
-    (h : 0 ≤ z ∧ z < ((2 ^ (n - 1) : Nat) : Int)) : bv_swrap n z = z := by
-  have hhalf : ((2 ^ n : Nat) : Int) = 2 * ((2 ^ (n - 1) : Nat) : Int) := by
-    have hn1 : n = (n - 1) + 1 := by omega
-    rw [hn1, Nat.pow_succ, Nat.mul_comm, Int.natCast_mul]
-    rfl
-  have hpos : (0 : Int) < ((2 ^ (n - 1) : Nat) : Int) := by
-    rw [Int.natCast_pos]
-    exact Nat.two_pow_pos _
-  unfold bv_swrap
-  rw [hhalf, Int.emod_eq_of_lt (by omega) (by omega)]
-  omega
-
 /-- `negw rd, rs` (= `subw rd, x0, rs`) then `andi rd, rd, 3`: zero on a
     4-aligned value. -/
 theorem negw_and3_aligned (x : word) (Hm : x.toNat % 4 = 0) :
@@ -389,54 +344,9 @@ theorem rdn_low_bytes (segs : List Segment) (m : word → Option byte) (a v : wo
   rw [rdn_firstn segs m 8 a (word_to_le_bytes 8 v) k H Hk,
     firstn_word_to_le_bytes k 8 v Hk]
 
-/-- splitting one byte off the front of a little-endian read. -/
-private theorem bytes_le_to_Nat_cons (b : byte) (rest : List byte) :
-    bytes_le_to_Nat (b :: rest) = bytes_le_to_Nat rest * 256 + b.toNat := by
-  have hb : b.toNat < 2 ^ 8 := b.isLt
-  simp only [bytes_le_to_Nat]
-  rw [Nat.or_comm, ← Nat.shiftLeft_add_eq_or_of_lt (i := 8) hb]
-  simp [Nat.shiftLeft_eq]
-
-/-- one limb of the modulus arithmetic below. -/
-private theorem mod_mul_256_of (q r M : Nat) (hr : r < 256) (hM : 0 < M) :
-    (256 * q + r) % (256 * M) = 256 * (q % M) + r := by
-  have hqM : q % M < M := Nat.mod_lt _ hM
-  have hrM : r < 256 * M := by omega
-  rw [Nat.add_mod, Nat.mul_mod_mul_left, Nat.mod_eq_of_lt hrM, Nat.mod_eq_of_lt (by omega)]
-
-/-- `Z_to_le_bytes`'s shift, at a `Nat`-valued argument. -/
-private theorem int_shiftRight_8_natCast (m : Nat) :
-    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
-  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
-
-/-- the low byte of a `Nat`, as `Z_to_le_bytes` encodes it. -/
-private theorem toNat_ofInt_8_nat (m : Nat) :
-    (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
-  rw [BitVec.toNat_ofInt, Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
-  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
-  simp
-
-/-- `x % (256 * M) = 256 * ((x / 256) % M) + x % 256`. -/
-private theorem mod_mul_256 (x M : Nat) (hM : 0 < M) :
-    x % (256 * M) = 256 * ((x / 256) % M) + x % 256 := by
-  have h := mod_mul_256_of (x / 256) (x % 256) M (Nat.mod_lt _ (by decide)) hM
-  rwa [Nat.div_add_mod] at h
-
-/-- lean`, same proof as
-    `Common/LibWritev.lean`'s): reading back `k` little-endian bytes of `m`
-    gives `m` truncated to `8k` bits. -/
-theorem bytes_le_to_Nat_Z_to_le_bytes (k m : Nat) :
-    bytes_le_to_Nat (Z_to_le_bytes k (m : Int)) = m % 2 ^ (8 * k) := by
-  induction k generalizing m with
-  | zero => simp [Z_to_le_bytes, bytes_le_to_Nat, Nat.mod_one]
-  | succ k ih =>
-    rw [Z_to_le_bytes, int_shiftRight_8_natCast m]
-    rw [bytes_le_to_Nat_cons, ih (m / 256), toNat_ofInt_8_nat]
-    have hM : 0 < 2 ^ (8 * k) := Nat.two_pow_pos _
-    rw [show 8 * (k + 1) = 8 * k + 8 by omega, Nat.pow_add]
-    rw [Nat.mul_comm (2 ^ (8 * k)) (2 ^ 8)]
-    rw [show 2 ^ 8 = 256 by decide, mod_mul_256 m (2 ^ (8 * k)) hM]
-    omega
+/- `Z_to_le_bytes`'s `>>> 8` shift at a `Nat` argument, and the low byte of
+   a `Nat`, are the canonical `BvBase.int_shiftRight_8_natCast` and
+   `BvBase.toNat_ofInt_8_nat`, imported and opened here. -/
 
 /-- A narrow load of a small word is the word's unsigned value. -/
 theorem bytes_le_to_Z_4_small (v : word) (Hv : v.toNat < 2 ^ 32) :
@@ -514,3 +424,11 @@ theorem Z_to_bv_u_eq (a : word) (z : Int) (H : z = (a.toNat : Int)) :
 theorem Z_to_bv_u_eq_sym (a : word) (z : Int) (H : z = (a.toNat : Int)) :
     a = BitVec.ofInt 64 z :=
   (Z_to_bv_u_eq a z H).symm
+
+
+
+
+
+
+
+

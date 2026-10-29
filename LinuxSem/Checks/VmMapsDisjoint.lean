@@ -497,8 +497,8 @@ import LinuxSem.Checks.VmMapsDisjoint.Chain
         `generalize`, the `fd_lookup` `cases` each alone).  It is proved
         with the checker FOLDED in `H` and the 11 arm equations as the leaf
         opener (`Check.Connect`'s own `connect_chk_*` design), each a
-        one-hole motive; those are `private` to that module, so
-        `check_connect_arm_*` are public restatements.  An external mirror
+        one-hole motive; those are public in that module, so this tree cites
+        them directly and the restatements it used to carry are gone.  An external mirror
         is not defeq-checkable either: `check_bind … = bind_full …` by
         `rfl`, and by `unfold … ; dsimp only ; rfl`, both give the kernel
         error after ~31 s, while staged tail lemmas each check in 0.4 s and

@@ -54,6 +54,7 @@ import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.Checks.Sys.Kernel.Time.PosixTimers
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Time.PosixTimers
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Time.Time
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -76,26 +77,10 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Kernel.Time.PosixTimers
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each is a transparent alias, so no statement below changes meaning.
-    (The same block heads every `Cases/Kernel/` file of this tree.) -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
+/-! Rocq spellings (`bv_unsigned`, `Z_to_bv`, `zeqb`/`zleb`/`zltb`) come from
+    `LinuxSem.Common.RocqSpelling`, opened above. -/
 
 /-- `=?` on `Z`. -/
 local infix:50 " =? " => BEq.beq
@@ -116,7 +101,7 @@ def clock_input (clkid : word) : SyscallInput :=
     starts the clock at its origin, so the reading is set on top of one. -/
 def clock_model (t : Int) : Model :=
   with_clock (Z_to_bv 64 t)
-    (mkModel [] (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+    (mkModel [] (mkVmMaps [] [] 0 0 demo_limit) IEof [])
 
 /-! One second, as the kernel would write it: tv_sec = 1, tv_nsec = 0. -/
 def ts_1s : List byte :=

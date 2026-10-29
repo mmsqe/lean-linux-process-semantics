@@ -31,6 +31,7 @@ import LinuxSem.Checks.Sys.Fs.Locks
 import LinuxSem.LinuxProcessSem.Sys.Fs.Locks
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
 import LinuxSem.LinuxProcessSem.Sys.Syscall
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -54,56 +55,16 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Fs.Locks
 
+open LinuxSem.Common.RocqSpelling
 
-/-! ## The prelude's abbreviations, restored
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed`: the signed value of a bitvector, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
+/-! The Rocq spellings used below (`bv_unsigned`, `Z_to_bv`, …) are the shared transparent aliases of `LinuxSem.Common.RocqSpelling`. -/
 
 /-- `Checks.Cases.Fs.ReadWrite`'s `mem_open_write`, spelled through its
     own namespace so that opening this one does not drag the other's shims
     in. -/
 abbrev mem_open_write : word → Option byte :=
   LinuxSem.Checks.Cases.Fs.ReadWrite.mem_open_write
-
-/-- `in_mem` as a function (a `SyscallInput` field projection). -/
-abbrev in_mem (i : SyscallInput) : word → Option byte := i.in_mem
-/-- `in_wmem` as a function. -/
-abbrev in_wmem (i : SyscallInput) : word → Option byte := i.in_wmem
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
-/-- `eff_writes` as a function. -/
-abbrev eff_writes (e : SyscallEffect) : List (word × List byte) := e.eff_writes
-/-- `eff_zeros` as a function. -/
-abbrev eff_zeros (e : SyscallEffect) : List (word × word) := e.eff_zeros
-/-- `eff_unmaps` as a function. -/
-abbrev eff_unmaps (e : SyscallEffect) : List (word × word) := e.eff_unmaps
-/-- `eff_copies` as a function. -/
-abbrev eff_copies (e : SyscallEffect) : List MemCopy := e.eff_copies
-/-- `eff_copyins` as a function. -/
-abbrev eff_copyins (e : SyscallEffect) : List (word × Nat) := e.eff_copyins
 
 /-! * LinuxProcessSem.Checks.Cases.Fs.Locks — worked examples over flock (32)
 
@@ -122,7 +83,7 @@ def flock_model : Model :=
     [ (0, FdEntry.FdChannel 0), (1, FdEntry.FdChannel 1), (2, FdEntry.FdChannel 2),
       (3, FdEntry.FdFile [102] 7), (4, FdEntry.FdFileW [103] 9), (5, FdEntry.FdDir) ]
     (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120]), ([103], [121])] none none none
+    [([102], [120]), ([103], [121])]
 
 /-! The same table with a SECOND descriptor on "f" — what a second
     [openat] of the same name produces.  Only fd 6 differs. -/
@@ -132,7 +93,7 @@ def flock_two_openers_model : Model :=
       (3, FdEntry.FdFile [102] 7), (4, FdEntry.FdFileW [103] 9), (5, FdEntry.FdDir),
       (6, FdEntry.FdFile [102] 0) ]
     (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120]), ([103], [121])] none none none
+    [([102], [120]), ([103], [121])]
 
 /-! SUCCESS IS INERT.  ADMISSION REASON: it pins model-internal state
     that no observation reveals.
@@ -227,7 +188,7 @@ theorem flock_success_is_inert :
 def flock_openers_model (es : List (word × FdEntry)) : Model :=
   mkModel ([(0, FdEntry.FdChannel 0), (1, FdEntry.FdChannel 1), (2, FdEntry.FdChannel 2)] ++ es)
     (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120])] none none none
+    [([102], [120])]
 
 /-! LOCK_EX on fd 3, which is the descriptor each model below puts on
     "f"; the effect claims the success, so a decline shows up as

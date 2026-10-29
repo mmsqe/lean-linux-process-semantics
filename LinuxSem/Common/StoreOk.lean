@@ -917,4 +917,54 @@ example : ¬ mem_grows (fun _ => some (BitVec.ofInt 8 0)) (fun _ => none) := by
   intro h
   exact absurd rfl (h 0 (by simp))
 
+
+
+/-- `testbit_drop_low`: bits at or above `j` do not see the low
+    part `r < 2^j`. -/
+theorem testbit_drop_low (q r j i : Nat) (hr : r < 2 ^ j) (hji : j ≤ i) :
+    Nat.testBit (q * 2 ^ j + r) i = Nat.testBit (q * 2 ^ j) i := by
+  have hsum : q * 2 ^ j + r = 2 ^ j * q + r := by rw [Nat.mul_comm q (2 ^ j)]
+  have hmul : q * 2 ^ j = 2 ^ j * q := by rw [Nat.mul_comm q (2 ^ j)]
+  rw [hsum, hmul, Nat.testBit_two_pow_mul_add (a := q) (b := r) (i := j) hr i,
+    ite_eq_right (by omega), Nat.testBit_two_pow_mul]
+  simp [hji]
+
+
+/-- `testbit_mask`: the bits of the high mask `2^64 - 2^j` are
+    exactly the positions `j <= i < 64`. -/
+theorem testbit_mask_nat (j i : Nat) (hj : j ≤ 64) :
+    Nat.testBit (2 ^ 64 - 2 ^ j) i = (decide (j ≤ i) && decide (i < 64)) := by
+  have h2 : 2 ^ j * 2 ^ (64 - j) = 2 ^ 64 := by
+    rw [← Nat.pow_add]
+    congr 1
+    omega
+  have hm : 2 ^ 64 - 2 ^ j = 2 ^ j * (2 ^ (64 - j) - 1) := by
+    rw [Nat.mul_sub_left_distrib, Nat.mul_one, h2]
+  rw [hm, Nat.testBit_two_pow_mul, Nat.testBit_two_pow_sub_one]
+  by_cases hji : j ≤ i
+  · have hd : decide (i - j < 64 - j) = decide (i < 64) := by
+      rcases Nat.lt_or_ge i 64 with h | h
+      · simp [h, show i - j < 64 - j from by omega]
+      · simp [h, show ¬ (i - j < 64 - j) from by omega]
+    simp [hji, hd]
+  · simp [hji]
+
+
+/-- a value below the half modulus is
+    fixed.  The bound `1 <= n` is this tree's `bv_swrap`-at-`0` caveat
+    (`bv_swrap 0 z = -1`,); every call site below has
+    `n >= 1`. -/
+theorem bv_swrap_small (n : Nat) (hn : 1 ≤ n) (z : Int)
+    (h : 0 ≤ z ∧ z < ((2 ^ (n - 1) : Nat) : Int)) : bv_swrap n z = z := by
+  have hhalf : ((2 ^ n : Nat) : Int) = 2 * ((2 ^ (n - 1) : Nat) : Int) := by
+    have hn1 : n = (n - 1) + 1 := by omega
+    rw [hn1, Nat.pow_succ, Nat.mul_comm, Int.natCast_mul]
+    rfl
+  have hpos : (0 : Int) < ((2 ^ (n - 1) : Nat) : Int) := by
+    rw [Int.natCast_pos]
+    exact Nat.two_pow_pos _
+  unfold bv_swrap
+  rw [hhalf, Int.emod_eq_of_lt (by omega) (by omega)]
+  omega
+
 end LinuxSem.Common.StoreOk

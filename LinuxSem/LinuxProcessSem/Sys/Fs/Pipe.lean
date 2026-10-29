@@ -35,10 +35,9 @@
   `with_fds`/`with_pipes` from `StateLedger`.
 
   `Z.ldiff` has no `Int` counterpart in
-  Lean core (there is no `Int.land` either), so `z_ldiff` below is a
-  local port helper of the same shape as `Uapi.z_lor`/`z_land` and
-  belongs beside them; it is defined here because this file is the only
-  caller and `Sys/Uapi.lean` is not this file to edit.
+  Lean core (there is no `Int.land` either), so `Sys/Uapi.lean` ports it
+  beside `z_lor`/`z_land`, and the `z_ldiff` below is a transparent alias
+  to that canonical definition rather than a second copy of it.
 -/
 import LinuxSem.LinuxProcessSem.MonadInstances
 import LinuxSem.LinuxProcessSem.StateLedger
@@ -80,16 +79,20 @@ def pipe2_errnos : List Int := [EMFILE, ENFILE, ENOMEM]
 
   Both are documented where they are defined. -/
 
-/--  `Z.ldiff` — the bitwise difference `a land lnot b` — through
-    `Nat`, exactly as `Uapi.z_lor`/`z_land` spell `Z.lor`/`Z.land`:
-    Lean core has no `Int` bitwise operations.
+/--  `Z.ldiff` — the bitwise difference `a land lnot b` — is
+    `Uapi.z_ldiff`, the canonical definition, as a transparent alias:
+    Lean core has no `Int` bitwise operations, which is why the body is
+    spelled through `Nat`.
 
-    The complement is taken at 64 bits, which is exact for the inputs
-    this file has — `a` is a `bv 64` read unsigned (`flags.toNat`), and
-    `b` is `pipe2_flags_mask`, 0x84880 — because a value below `2^64`
-    occupies no bit above 63, so `a land (2^64 - 1 - b) = a land lnot b`.
-    Truncating either argument would be visible; both are bounded. -/
-def z_ldiff (a b : Int) : Int := ((a.toNat &&& (2 ^ 64 - 1 - b.toNat) : Nat) : Int)
+    The body there is `a - (a &&& b)`, which agrees with
+    `a land lnot b` on the inputs this file has — `a` is a `bv 64` read
+    unsigned (`flags.toNat`), and `b` is `pipe2_flags_mask`, 0x84880 —
+    because a value below `2^64` occupies no bit above 63, so exactly the
+    bits of `b` are cleared from `a`.  On those bounded operands the
+    `Nat`-mask form this file used to spell (`a &&& (2^64 - 1 - b)`) and
+    `a - (a &&& b)` are the same value.  Truncating either argument would
+    be visible; both are bounded. -/
+abbrev z_ldiff (a b : Int) : Int := LinuxSem.LinuxProcessSem.Sys.Uapi.z_ldiff a b
 
 /-- The kernel returns the LOWEST free descriptor, as Linux does
     (e.g. after close(1), the next open returns fd 1) — computed by
@@ -335,7 +338,7 @@ private def demoWmem : word → Option byte := fun _ => some 0
 /-- The model the checks run in: an empty fd table, an empty pipe table,
     an empty file system, EOF on stdin and no halt. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A `pipe2` input: `fildes = 0x1000`, `flags = 0`. -/
 private def demoInput : SyscallInput :=

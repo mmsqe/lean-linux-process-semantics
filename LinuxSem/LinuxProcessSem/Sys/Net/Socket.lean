@@ -64,7 +64,7 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
   (rw_bytes_max modeled_rw_count access_ok_zero)
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd z_ldiff)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite (UIO_FASTIOV)
 open LinuxSem.LinuxProcessSem.Sys.Fs.Fcntl (setfl_noop_on setfl_acted_on)
 
@@ -2601,7 +2601,7 @@ private def demoFds : List (word × FdEntry) :=
     index 0 — the QUIET QUEUE, so `accept` here hands over 0.0.0.0:0
     with nothing to say and reports it on channel `0 + 3 = 3`. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A little-endian byte image of `struct sockaddr_in` with the bytes
     `sockaddrInAny` and nothing else mapped, anything below `base`
@@ -2845,42 +2845,11 @@ example : socket_spec 2 SOCK_STREAM 0 noMemInput demoModel
     · simp [ret_only, pure]
 
 
-/-! ## A port helper for the checks: reading the input is pure
+/-! ## Reading the input is pure
 
-  `Monad.lean` carries `bind_getModel` (reading the model is pure) but no
-  input twin, because the specs reach for `input` only where the
-  memory views are needed.  The three specs below that read memory
-  (`bind`, `connect`, `sendto`, `sendmsg`, `getsockopt`, `socketpair`)
-  do, so the same lemma is proved here once: a `Sys` chain that starts
-  with `input` is the continuation at that input. -/
+  The prologue `i <- input` of the specs below is peeled with the canonical
+  `MonadInstances.bind_inputSpec`, the input twin of `bind_getModel`. -/
 
-/-- Reading the syscall input is pure: a `bind` that starts with `input`
-    is the continuation at the very input it read. -/
-theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-      simp only [bind, inputSpec, input]
-      constructor
-      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-        simp only [Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        simp only [List.nil_append] at h3
-        subst h3
-        exact h2
-      · intro h
-        exact ⟨i, m, [], evs, rfl, h, by simp⟩
-  | unmodeled =>
-      simp only [bind, inputSpec, input]
-      constructor
-      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
-        · exact absurd h (by simp)
-        · simp only [Outcome.ok.injEq] at h1
-          obtain ⟨rfl, rfl, rfl⟩ := h1
-          exact h2
-      · intro h
-        exact Or.inr ⟨i, m, [], rfl, h⟩
 
 /-- The `err_ret` outcome spelled out: `err_ret e` is `pure (mkEffect
     (errno_ret e) [] [])`, so its only outcome is the errno with an empty
@@ -3343,7 +3312,8 @@ example : sendto_spec 9 (BitVec.ofInt 64 0x7fffffffffff) 8 0x4000 0 0
   simp only [getModelSpec, bind_inputSpec, bind_getModel]
   rw [ite_eq_right (by decide)]
   simp only [LinuxSem.LinuxProcessSem.Sys.Uaccess.err_ret,
-    LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only, pure]
+    LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only,
+    LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only, pure]
 
 /-- ... and once the buffer is accepted, a closed fd IS -EBADF. -/
 example : sendto_spec 9 4096 4 0x4000 0 0 demoInput demoModel
@@ -3441,7 +3411,8 @@ example : recvfrom_spec 9 (BitVec.ofInt 64 0x7fffffffffff) 8 demoInput demoModel
   unfold access_ok_zero
   rw [ite_eq_right (by decide)]
   simp only [LinuxSem.LinuxProcessSem.Sys.Uaccess.err_ret,
-    LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only, pure]
+    LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only,
+    LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only, pure]
 
 /-- A SOCKET IS `unmodeled` FOR THE RECV-FAMILY ENTRY POINTS — the
     decline is the ENTRY POINT's, not socket reading's. -/

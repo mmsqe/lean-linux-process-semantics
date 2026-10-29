@@ -120,7 +120,7 @@ private def portFds : List (word × FdEntry) :=
 /-- The model the checks run in: the table above, an empty VM ledger, an
     empty file system, EOF on stdin, no halt and no rlimit. -/
 private def portModel : Model :=
-  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A CLOSED FD IS -EBADF: the fd is resolved before the object is
     examined. -/

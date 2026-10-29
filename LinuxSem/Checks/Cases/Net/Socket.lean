@@ -13,9 +13,9 @@
   `Sys` module, without running a binary.
 
   Spelling.  Statements keep their names, and every spelling Lean does not
-  have is supplied below as a local transparent `abbrev`, DEFINITIONALLY
-  EQUAL to what it stands for, so each statement denotes exactly the same
-  claim:
+  have comes from `LinuxSem.Common.RocqSpelling`, a transparent `abbrev`
+  DEFINITIONALLY EQUAL to what it stands for, so each statement denotes
+  exactly the same claim:
 
   - `bv_unsigned w` is `(w.toNat : Int)` and `Z_to_bv n z` is
     `BitVec.ofInt n z`;
@@ -70,6 +70,7 @@ import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite
 import LinuxSem.LinuxProcessSem.Sys.Net.Socket
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -92,26 +93,10 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Net.Socket
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` on `Int`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
+/-! Rocq spellings (`bv_unsigned`, `Z_to_bv`, `zeqb`/`zleb`/`zltb`) come from
+    `LinuxSem.Common.RocqSpelling`, opened above. -/
 
 /-- `Z.shiftr`: arithmetic shift right, i.e. floor division by
     `2 ^ n`. -/
@@ -138,7 +123,7 @@ inductive Forall {α : Type} (p : α → Prop) : List α → Prop where
     The route, with the measurements behind it.  The concrete `Example`s
     of this file that reach a checker reading a `word` argument through
     `Sys.Syscall.sint32` (socket 198, bind 200, connect 203, setsockopt
-    208, getsockopt 209) are the ones plain `rfl` cannot close on the
+    208, getsockopt 209) are the ones plain `rfl` could not close on the
     guard SHAPE this note measures: `rfl` is KERNEL reduction, and the
     kernel cannot get through a test that compares an `Int.ofNat` of a
     `BitVec.toNat`,
@@ -149,12 +134,13 @@ inductive Forall {α : Type} (p : α → Prop) : List α → Prop where
 
     `Sys.Syscall.sint32` WAS written exactly that way.  On toolchain
     v4.35 the divergence below spread out of `rfl` into every `simp`/`rw`
-    that unfolds such a definition, so `sint32` itself is now written
-    with the test on the `Nat` (`let n : Nat := (abi_low32 w).toNat; if n
-    < 2 ^ 31 then …`, the same function) and can be unfolded again.  THE
-    WALL IS NOT GONE: it still stands in front of the same shape wherever
-    else it occurs — `Sys.Syscall.nfds_signed`, `StateVm.lazy_interior`
-    — which is why the routes below remain the
+    that unfolds such a definition, so `sint32` is now
+    `(w.setWidth 32).toInt` — `BitVec.setWidth` then core's
+    two's-complement `BitVec.toInt`, both of which the kernel reduces at a
+    literal — and a `sint32`-reading checker no longer meets the wall.
+    THE WALL IS NOT GONE: it still stands in front of the `narrow` shape
+    wherever else it occurs — `Sys.Syscall.nfds_signed`,
+    `StateVm.lazy_interior` — which is why the routes below remain the
     recipe.  The measurements are stated at `narrow`.
 
     MEASURED, on this toolchain, at `maxRecDepth` 1e6 / 1e7:
@@ -205,8 +191,8 @@ inductive Forall {α : Type} (p : α → Prop) : List α → Prop where
     3. `simp [<the checker>, int32, fd32, int32_neg, sint32, abi_low32]`
        unfolds the checker and normalises `sint32` at its (now literal)
        argument.  This is the step that matters: with `abi_low32` in the
-       set, `↑(BitVec.toNat (abi_low32 2#64))` becomes the literal `2`, and
-       `simp`'s own arithmetic lemmas discharge the `Int` comparison -- the
+       set, the narrowed word becomes a literal, and `simp` reduces
+       `BitVec.setWidth`/`BitVec.toInt` (the body of `sint32`) on it -- the
        same reduction `by decide` performs above.  (`int32`/`fd32` are in
        the set because the dispatch applies them to the arguments.)
     4. `rfl` closes what is left: the checker body is by now an `if`-chain
@@ -214,8 +200,8 @@ inductive Forall {α : Type} (p : α → Prop) : List α → Prop where
        and the kernel reduces THOSE without trouble.  `Int` `<` on a cast
        operand is the one shape it cannot, and step 3 removes it.
 
-    With `sint32` normalised the kernel no longer meets the instance it
-    cannot unfold, which is exactly the obstruction.
+    With `sint32` normalised to a literal the kernel no longer meets a
+    `narrow`-shaped comparison, which is exactly the obstruction.
     Nothing here is `native_decide`: every proof is an ordinary proof term,
     so no extra postulate enters the library.
 
@@ -520,7 +506,7 @@ def listening_socket_model : Model :=
     (mkModel
        [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
          (3, FdSocket SkListening) ]
-       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [])
 
 /-! The model a successful accept must leave behind.  The new
     descriptor carries the head connection's peer and its script, on the
@@ -947,7 +933,7 @@ def fresh_socket_model : Model :=
     (mkModel
        [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
          (3, FdSocket SkFresh) ]
-       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [])
 
 /-! Sixteen readable bytes at 4096 holding [struct sockaddr_in] for
     AF_INET, port 0, INADDR_ANY -- the one address [bind_spec] accepts.
@@ -1332,7 +1318,7 @@ def bound_socket_model : Model :=
     (mkModel
        [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
          (3, FdSocket SkBound) ]
-       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [])
 
 /-! -EISCONN ON A LISTENING SOCKET, which is the answer worth a case of
     its own: [listen] leaves [sock->state] at SS_UNCONNECTED and moves
@@ -1479,7 +1465,7 @@ def socket_call_model : Model :=
        [ (0, FdChannel 0), (3, FdFile [102] 0), (4, FdFileW [103] 0),
          (5, FdDir) ]
        (mkVmMaps [] [] 0 0 demo_limit) IEof
-       [([102], [104, 105]), ([103], [])] none none none)
+       [([102], [104, 105]), ([103], [])])
 
 /-! NO NON-SOCKET FD KIND IS A SOCKET, on all five calls.
     [sock_from_file] tests the file's [f_op] for [socket_file_ops]
@@ -1603,7 +1589,7 @@ def socket_states_model : Model :=
          (9, FdSocket (SkConnected (mkPeer (Z_to_bv 32 16909060) (Z_to_bv 16 443)) 3 NFin)),
          (10, FdSocket (SkReset (mkPeer (Z_to_bv 32 16909060) (Z_to_bv 16 443)) 3)) ]
        (mkVmMaps [] [] 0 0 demo_limit) IEof
-       [([102], [104, 105])] none none none)
+       [([102], [104, 105])])
 
 /-! GETPEERNAME IS THE ARM [SkReset] EXISTS FOR.  [inet_getname] with
     [peer = 1] refuses on [!inet_dport] -- fresh, bound and listening --

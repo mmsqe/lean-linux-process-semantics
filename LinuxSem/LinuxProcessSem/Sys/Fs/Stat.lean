@@ -871,7 +871,7 @@ private def demoFs : List (path × List byte) :=
 /-- The model the checks run in: the fd table above, an empty VM ledger,
     EOF on stdin, no stat pins yet, no halt and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof demoFs none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof demoFs
 
 /-- The same model with `f`'s `struct stat` already pinned, which is the
     branch that must repeat the pinned bytes rather than choose again.
@@ -882,7 +882,7 @@ private def pinnedModel : Model :=
 
 /-- The model with an EMPTY file system: every pathname is absent. -/
 private def emptyModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The fully writable overlay the `fstat` checks deliver into. -/
 private def demoWmem : word → Option byte := fun _ => some 0

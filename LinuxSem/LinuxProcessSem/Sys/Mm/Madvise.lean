@@ -442,7 +442,7 @@ private def demoModel : Model :=
   with_vm_backing [(BitVec.ofInt 64 0x1000, BitVec.ofInt 64 0x3000)]
     [BitVec.ofInt 64 0x1000, BitVec.ofInt 64 0x2000,
      BitVec.ofInt 64 0x5000]
-    (mkModel [] demoVm IEof [] none none none)
+    (mkModel [] demoVm IEof [])
 
 /-- THE POST-STATE drops every materialized page in the rounded range
     `[0x1000, 0x2000)`, keeps the two outside it, and moves nothing

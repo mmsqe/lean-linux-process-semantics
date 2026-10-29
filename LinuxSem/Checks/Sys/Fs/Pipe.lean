@@ -43,6 +43,7 @@ open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Fs.Pipe
 open LinuxSem.Checks.Sys.Prelude
+open LinuxSem.LinuxProcessSem.Sys.Fs.DPath
 
 /- =========================================================================
    The pipe2 descriptors and the model it leaves behind
@@ -511,34 +512,9 @@ theorem check_pipe2_sound_unmodeled (i : SyscallInput) (fildes flags : word)
 
    (`bind_inputSpec` is the prologue peel: `i <- input ;; m <- get_model`
    reads the input and the model it started in, so the body is stated at
-   `i` and `m`.  It is `Checks.Witness.Kernel.Sched.Syscalls`' lemma of the
-   same name, restated here because that one is `private`.) -/
-
-private theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-      simp only [LinuxSem.LinuxProcessSem.bind]
-      constructor
-      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-        simp only [inputSpec, input, Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        simp only [List.nil_append] at h3
-        subst h3
-        exact h2
-      · intro h
-        exact ⟨i, m, [], evs, rfl, h, by simp⟩
-  | unmodeled =>
-      simp only [LinuxSem.LinuxProcessSem.bind]
-      constructor
-      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
-        · exact absurd h (by simp [inputSpec, input])
-        · simp only [inputSpec, input, Outcome.ok.injEq] at h1
-          obtain ⟨rfl, rfl, rfl⟩ := h1
-          exact h2
-      · intro h
-        exact Or.inr ⟨i, m, [], rfl, h⟩
+   `i` and `m`.  It is the canonical `LinuxProcessSem.bind_inputSpec`
+   (`MonadInstances`), opened by this file's
+   `open LinuxSem.LinuxProcessSem`.) -/
 
 theorem modifySpec_ok_inv (f : Model → Model) (i : SyscallInput) (m : Model) (u : Unit)
     (m' : Model) (evs : List event) (H : modifySpec f i m (.ok u m' evs)) :
@@ -546,12 +522,6 @@ theorem modifySpec_ok_inv (f : Model → Model) (i : SyscallInput) (m : Model) (
   simp only [modifySpec, LinuxSem.LinuxProcessSem.modify,
     Outcome.ok.injEq] at H
   exact ⟨H.2.1, H.2.2⟩
-
-theorem modifySpec_not_unmodeled (f : Model → Model) (i : SyscallInput) (m : Model) :
-    ¬ modifySpec f i m .unmodeled := by
-  intro H
-  simp only [modifySpec, LinuxSem.LinuxProcessSem.modify] at H
-  exact nomatch H
 
 theorem pure_not_unmodeled {A : Type} (x : A) (i : SyscallInput) (m : Model) :
     ¬ LinuxSem.LinuxProcessSem.pure (M := Model) (I := SyscallInput)
@@ -582,12 +552,6 @@ theorem err_ret_ok_inv (e : Int) (i : SyscallInput) (m : Model) (eff : SyscallEf
     Outcome.ok.injEq] at H
   exact H
 
-theorem err_ret_not_unmodeled (e : Int) (i : SyscallInput) (m : Model) :
-    ¬ err_ret e i m .unmodeled := by
-  intro H
-  simp only [err_ret, ret_only, LinuxSem.LinuxProcessSem.pure] at H
-  exact nomatch H
-
 theorem errno_from_err_ret_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
     (eff : SyscallEffect) (m' : Model) (evs : List event)
     (H : bind (errno_from es) (fun e => err_ret e) i m (.ok eff m' evs)) :
@@ -599,19 +563,6 @@ theorem errno_from_err_ret_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
   refine ⟨x, hmem, heff, ?_⟩
   rw [hm, hevs, hevs2]
   simp
-
-theorem errno_from_err_ret_not_unmodeled (es : List Int) (i : SyscallInput)
-    (m : Model) : ¬ bind (errno_from es) (fun e => err_ret e) i m .unmodeled := by
-  intro H
-  unfold LinuxSem.LinuxProcessSem.bind at H
-  dsimp only at H
-  cases H with
-  | inl H1 =>
-    obtain ⟨e, _hmem, heq⟩ := H1
-    exact nomatch heq
-  | inr H2 =>
-    obtain ⟨x, m1, evs1, hc, he⟩ := H2
-    exact absurd he (err_ret_not_unmodeled x i m1)
 
 /-- One `bind`'s unmodeled case, as a rewrite rule (the definition is a
     `match` on the outcome, which `rw` cannot see through). -/
@@ -705,13 +656,13 @@ theorem pipe2_chain_unmodeled_false (fds : List (word × FdEntry))
       try dsimp only at hrest2
       rw [bind_unmodeled_iff] at hrest2
       cases hrest2 with
-      | inl H5 => exact modifySpec_not_unmodeled _ i m2 H5
+      | inl H5 => exact modifySpec_no_unmodeled _ i m2 H5
       | inr H6 =>
         obtain ⟨u, m3, evs3, hmod, hrest3⟩ := H6
         try dsimp only at hrest3
         rw [bind_unmodeled_iff] at hrest3
         cases hrest3 with
-        | inl H7 => exact modifySpec_not_unmodeled _ i m3 H7
+        | inl H7 => exact modifySpec_no_unmodeled _ i m3 H7
         | inr H8 =>
           obtain ⟨u2, m4, evs4, hmod2, hpure⟩ := H8
           exact pure_not_unmodeled _ i m4 hpure
@@ -865,14 +816,14 @@ theorem check_pipe2_complete_unmodeled (i : SyscallInput) (fildes flags : word)
         by_cases hak : (!(access_okb fildes 8)) = true
         · simp only [ite_eq_left hak] at H
           cases H with
-          | inl H1 => exact absurd H1 (errno_from_err_ret_not_unmodeled _ _ _)
-          | inr H2 => exact absurd H2 (err_ret_not_unmodeled EFAULT i m)
+          | inl H1 => exact absurd H1 (errno_arm_ne_unmodeled _ _ _)
+          | inr H2 => exact absurd H2 (err_ret_unmodeled_false EFAULT i m)
         · simp only [ite_eq_right hak] at H
           cases h8 : read_bytes_map i.in_wmem fildes (BitVec.ofInt 64 8) with
           | some w8 =>
             simp only [h8] at H
             cases H with
-            | inl H1 => exact absurd H1 (errno_from_err_ret_not_unmodeled _ _ _)
+            | inl H1 => exact absurd H1 (errno_arm_ne_unmodeled _ _ _)
             | inr H2 =>
               exact absurd H2
                 (pipe2_chain_unmodeled_false (m_fds m) (m_pipes m) fildes
@@ -889,8 +840,8 @@ theorem check_pipe2_complete_unmodeled (i : SyscallInput) (fildes flags : word)
             | none =>
               simp only [h1] at H
               cases H with
-              | inl H1 => exact absurd H1 (errno_from_err_ret_not_unmodeled _ _ _)
-              | inr H2 => exact absurd H2 (err_ret_not_unmodeled EFAULT i m)
+              | inl H1 => exact absurd H1 (errno_arm_ne_unmodeled _ _ _)
+              | inr H2 => exact absurd H2 (err_ret_unmodeled_false EFAULT i m)
 
 /- =========================================================================
    Sanity checks (not library lemmas)
@@ -915,7 +866,7 @@ private def portWmem : word → Option byte := fun _ => some 0
 /-- The model the checks run in: an empty fd table, an empty pipe table, an
     empty VM ledger, EOF on stdin and no halt. -/
 private def portModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A `pipe2` input: `fildes = 0x1000`, `flags = 0`. -/
 private def portInput : SyscallInput :=
@@ -1034,3 +985,7 @@ example :
   exact ite_eq_left (by decide)
 
 end LinuxSem.Checks.Sys.Fs.Pipe
+
+
+
+

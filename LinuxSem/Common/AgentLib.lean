@@ -50,11 +50,13 @@ import LinuxSem.Common.CatSim
 import LinuxSem.Common.SeqExec
 import LinuxSem.Common.StreamExec
 import LinuxSem.Common.ShapeAlg
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 set_option linter.unusedVariables false
 
 namespace LinuxSem.Common.AgentLib
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -91,21 +93,6 @@ theorem t_emit_app (a b : List event) (T : TSet) :
       · subst he2
         exact Or.inr ⟨tr'', by rw [List.append_assoc], HT⟩
 
-/-- [t_emit] respects [t_eq] in its continuation. -/
-theorem t_emit_congr (e : List event) (T T' : TSet) (H : t_eq T T') :
-    t_eq (t_emit e T) (t_emit e T') := by
-  intro tr
-  unfold t_emit
-  exact or_congr Iff.rfl (exists_congr fun tr' => and_congr Iff.rfl (H tr'))
-
-/-- [t_alt2] respects [t_eq] in both arguments. -/
-theorem t_alt2_congr (A A' B B' : TSet)
-    (HA : t_eq A A') (HB : t_eq B B') :
-    t_eq (t_alt2 A B) (t_alt2 A' B') := by
-  intro tr
-  unfold t_alt2
-  exact or_congr (HA tr) (HB tr)
-
 /-- A shape prefixed by no events is that shape.  (The `ShapeAlg` lemma,
     restated with the nonemptiness premise in the convenient position.) -/
 theorem t_emit_nil_l (T : TSet) (H0 : T []) : t_eq (t_emit [] T) T :=
@@ -121,7 +108,7 @@ theorem t_emit_app3 (a b c : List event) (T : TSet) :
     t_eq (t_emit a (t_emit b (t_emit c T))) (t_emit (a ++ b ++ c) T) := by
   rw [List.append_assoc]
   exact t_eq_sym (t_eq_trans (t_emit_app a (b ++ c) T)
-    (t_emit_congr a _ _ (t_emit_app b c T)))
+    (t_emit_cong a _ _ (t_emit_app b c T)))
 
 /-- [map] distributes, for the [W ch] spelling of write blocks. -/
 theorem map_app3 {A B : Type} (f : A → B) (a b c : List A) :
@@ -225,13 +212,6 @@ theorem v_addi_lit (a i : Int) (Ha : 0 ≤ a ∧ a < 2 ^ 64) :
     v_addi (BitVec.ofInt 64 a) i = BitVec.ofInt 64 (a + i) := by
   unfold v_addi
   rw [u64_lit a Ha]
-
-/-- Equality of [Z_to_bv 64] literals modulo 2^64. -/
-theorem Z_to_bv_64_mod (z : Int) :
-    BitVec.ofInt 64 z = BitVec.ofInt 64 (z % ((2 ^ 64 : Nat) : Int)) := by
-  apply BitVec.eq_of_toNat_eq
-  rw [BitVec.toNat_ofInt, BitVec.toNat_ofInt]
-  exact congrArg Int.toNat (Int.emod_emod z _).symm
 
 /-- Two `Bool`s equal their `decide`.  (`==` on `Int` is `decide`, while
     `bv_eqb` is the `BEq` of `BitVec`, which is lawful but does not reduce to
@@ -374,3 +354,6 @@ example : zall 0 (fun z => decide (z = 5)) 5 = true := by decide
 example : zall 2 (fun z => decide (z = 5)) 4 = false := by decide
 
 end LinuxSem.Common.AgentLib
+
+
+

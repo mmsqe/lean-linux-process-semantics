@@ -32,14 +32,15 @@
   `gate_eq` generalizes each of the six comparisons to an opaque `Bool`,
   `cases` all six, and closes each of the 64 leaves by `rfl`.  The four
   theorems then split once on the assembled predicate, which is the spec's,
-  and each leaf is one arm: the correspondence step is `arm_ok`, a
-  `CheckUnmodeled`-vs-`CheckOk` equation is closed by `exact nomatch H`,
-  and a leaf answers with `pure_ok` or `unmodeled_intro`.
+  and each leaf is one arm: the correspondence step is the shared `arm_ok`
+  (see `Checks.Sys.Prelude`), a `CheckUnmodeled`-vs-`CheckOk` equation is
+  closed by `exact nomatch H`, and a leaf answers with `pure_ok` or
+  `unmodeled_intro`.
 
   The accepted arm answers through [check_ret_only] and the spec's through
-  `err_ret`, so the two directions of that correspondence and the spec's
-  never-`unmodeled` fact are the same three private helpers the `Fcntl`,
-  `Ioctl` and `Sync` checkers carry.
+  `err_ret`, so the two directions of that correspondence are the canonical
+  `arm_ok` / `arm_check_ok`; only the spec's never-`unmodeled` fact stays
+  below, as `ret_only_ne_unmodeled`.
 -/
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Fs.Timerfd
@@ -50,7 +51,6 @@ open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
-open LinuxSem.LinuxProcessSem.Sys.Fs.File
 open LinuxSem.LinuxProcessSem.Sys.Fs.Timerfd
 open LinuxSem.Checks.Sys.Prelude
 
@@ -102,8 +102,10 @@ def check_timerfd_create (clkid flags : word) (eff : SyscallEffect)
    `gate_eq` states the gate equality as a lemma: both sides are Bool
    computations over the same six comparisons, so splitting all six —
    rather than the assembled condition — decides the equality whatever the
-   two files' parenthesization.  The three helpers are the one-word arm
-   correspondence, as in the `Fcntl` checker.
+   two files' parenthesization.  The one-word arm correspondence is the
+   shared `arm_ok` / `arm_check_ok` (see `Checks.Sys.Prelude`); the
+   never-`unmodeled` helper is the shared `ret_only_ne_unmodeled` of
+   `Checks.Sys.Prelude`, opened above.
    ========================================================================= -/
 
 /-- The restated gate and the spec's `timerfd_create_einval_b` coincide on
@@ -118,29 +120,6 @@ private theorem gate_eq (clkid flags : word) :
   generalize h5 : ((clkid.toNat : Int) == CLOCK_REALTIME_ALARM) = e
   generalize h6 : ((clkid.toNat : Int) == CLOCK_BOOTTIME_ALARM) = f
   cases a <;> cases b <;> cases c <;> cases d <;> cases e <;> cases f <;> rfl
-
-/-- Checker → spec, for the one answered arm: an accepted
-    `check_ret_only` *is* the spec's `err_ret` at that word. -/
-private theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨rfl, rfl, rfl⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  exact pure_ok _ i _
-
-/-- Spec → checker, for the one answered arm. -/
-private theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨rfl, rfl, rfl⟩ := H
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- No `ret_only` (hence no `err_ret`) answers `unmodeled`. -/
-private theorem arm_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  exact nomatch H
 
 /- =========================================================================
    The four lemmas
@@ -202,7 +181,7 @@ theorem check_timerfd_create_complete_unmodeled (clkid flags : word)
   rw [gate_eq clkid flags]
   by_cases hg : timerfd_create_einval_b clkid flags = true
   · simp only [ite_eq_left hg] at H ⊢
-    exact absurd H (arm_ne_unmodeled _ i m)
+    exact absurd H (ret_only_ne_unmodeled _ i m)
   · simp only [ite_eq_right hg] at H ⊢
 
 /- =========================================================================
@@ -221,7 +200,7 @@ theorem check_timerfd_create_complete_unmodeled (clkid flags : word)
     empty file system, EOF on stdin, no halt.  `timerfd_create_spec` reads
     none of it. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- THE GATE, CLOCK ID BY ID: the five admitted ids pass it, and the ids
     `clock_gettime` answers but `timerfd_create` refuses fail it. -/
@@ -301,3 +280,4 @@ example : errno_ret EINVAL = BitVec.ofInt 64 (-22) := by decide
 example : TFD_CREATE_FLAGS = 526336 := by decide
 
 end LinuxSem.Checks.Sys.Fs.Timerfd
+

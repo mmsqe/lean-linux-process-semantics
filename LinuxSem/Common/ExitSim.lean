@@ -131,14 +131,6 @@ theorem syscall_spec_exit (i : SyscallInput) (m : Model)
     show (arm 94 (fun i => exit_spec (in_arg i 0))).sa_spec i m o ↔ _
     rfl
 
-/-- `exit_spec` has exactly one admissible `ok` outcome: return 0, write
-    nothing, emit nothing, and halt the model at the masked code. -/
-theorem exit_spec_ok_shape (code : word) (i : SyscallInput) (m : Model) :
-    exit_spec code i m
-      (.ok (mkEffect (BitVec.ofInt 64 0) [] [])
-        (with_halted (code &&& BitVec.ofInt 64 255) m) []) := by
-  refine ⟨(), with_halted (code &&& BitVec.ofInt 64 255) m, [], [], rfl, rfl, rfl⟩
-
 /-- …and that outcome is the ONLY one. -/
 theorem exit_spec_ok_inv (code : word) (i : SyscallInput) (m : Model)
     (eff : SyscallEffect) (m' : Model) (evs : List event)
@@ -164,7 +156,7 @@ theorem exit_dispatch_ok (i : SyscallInput) (m : Model) :
       (.ok (mkEffect (BitVec.ofInt 64 0) [] [])
         (with_halted (in_arg i 0 &&& BitVec.ofInt 64 255) m) [])) := by
   intro Hno
-  exact (syscall_spec_exit i m _ Hno).mpr (exit_spec_ok_shape _ _ _)
+  exact (syscall_spec_exit i m _ Hno).mpr (exit_spec_ok _ _ _)
 
 /-- Every admissible exit outcome IS that unique one. -/
 theorem exit_dispatch_ok_inv (i : SyscallInput) (m : Model) (eff : SyscallEffect)
@@ -1013,3 +1005,4 @@ example : stack_to_mem (BitVec.ofInt 64 100)
 end Sanity
 
 end LinuxSem.Common.ExitSim
+

@@ -103,6 +103,7 @@ import LinuxSem.Common.CatSim
 import LinuxSem.Common.CatExec
 import LinuxSem.Common.SeqExec
 import LinuxSem.EquivalenceDefinition.Equivalence
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 set_option maxHeartbeats 1000000
@@ -138,6 +139,7 @@ open LinuxSem.Common.MmapSim
 open LinuxSem.Common.ShapeAlg
 
 namespace LinuxSem.Common.DrainAlg
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 /-- The FP state at process entry, so that the `PropExec`/`MmapSim` lemmas
     the imported modules state elaborate.  Same local instance
@@ -408,19 +410,6 @@ theorem t_emit_app (a b : List event) (T : TSet) :
     · subst he
       exact Or.inr ⟨b ++ tr', by rw [List.append_assoc], Or.inr ⟨tr', rfl, HT⟩⟩
 
-/-- [t_emit] respects [t_eq] in its continuation.  ([t_eq] is not a
-    registered setoid relation, so this replaces a [rewrite].) -/
-theorem t_emit_cong (e : List event) (T T' : TSet) (H : t_eq T T') :
-    t_eq (t_emit e T) (t_emit e T') := by
-  intro tr
-  unfold t_emit
-  constructor <;>
-    rintro (Hp | ⟨tr', he, HT⟩)
-  · exact Or.inl Hp
-  · exact Or.inr ⟨tr', he, (H tr').1 HT⟩
-  · exact Or.inl Hp
-  · exact Or.inr ⟨tr', he, (H tr').2 HT⟩
-
 /- =========================================================================
    The bounded drain loop
    ========================================================================= -/
@@ -443,7 +432,7 @@ theorem dcnt_pos (cap : Nat) (Hcap : (cap : Int) < 2 ^ 64) (acc : List byte)
     (H : acc.length < cap) : (0 : Int) < ((dcnt cap acc).toNat : Int) := by
   have h : ((dcnt cap acc).toNat : Int) = ((cap - acc.length : Nat) : Int) := by
     unfold dcnt
-    refine toNat_ofInt_small (by omega) ?_
+    refine toNat_ofInt_eq_self (by omega) ?_
     rw [Int.natCast_pow]
     exact Int.lt_of_le_of_lt (Int.ofNat_le.mpr (Nat.sub_le cap acc.length)) Hcap
   omega
@@ -453,7 +442,7 @@ theorem dcnt_max (cap : Nat) (Hcap : (cap : Int) < 2 ^ 64)
     (H : acc.length ≤ cap) : ((dcnt cap acc).toNat : Int) ≤ rw_bytes_max := by
   have h : ((dcnt cap acc).toNat : Int) = ((cap - acc.length : Nat) : Int) := by
     unfold dcnt
-    refine toNat_ofInt_small (by omega) ?_
+    refine toNat_ofInt_eq_self (by omega) ?_
     rw [Int.natCast_pow]
     exact Int.lt_of_le_of_lt (Int.ofNat_le.mpr (Nat.sub_le cap acc.length)) Hcap
   rw [h]
@@ -465,7 +454,7 @@ theorem dcnt_val (cap : Nat) (Hcap : (cap : Int) < 2 ^ 64) (acc : List byte)
     (H : acc.length ≤ cap) :
     ((dcnt cap acc).toNat : Int) = ((cap - acc.length : Nat) : Int) := by
   unfold dcnt
-  refine toNat_ofInt_small (by omega) ?_
+  refine toNat_ofInt_eq_self (by omega) ?_
   rw [Int.natCast_pow]
   exact Int.lt_of_le_of_lt (Int.ofNat_le.mpr (Nat.sub_le cap acc.length)) Hcap
 
@@ -861,17 +850,6 @@ theorem rz_mmap_drain (cap : Nat) (Hcap : (cap : Int) < 2 ^ 64)
     -- hence the whole drain shape — is untouched by the grant.
     exact rz_drain_top segs cap Hcap Hcap_modeled LH Tfin Hfull Hread _ (Hsucc a Ha)
 
-theorem t_alt2_cong (A A' B B' : TSet) (HA : t_eq A A') (HB : t_eq B B') :
-    t_eq (t_alt2 A B) (t_alt2 A' B') := by
-  intro tr
-  unfold t_alt2
-  constructor <;>
-    rintro (H | H)
-  · exact Or.inl ((HA tr).1 H)
-  · exact Or.inr ((HB tr).1 H)
-  · exact Or.inl ((HA tr).2 H)
-  · exact Or.inr ((HB tr).2 H)
-
 /-- The same composition with the drain's chunking nondeterminism
     ELIMINATED ([t_drain_top_collapse]).  This is the shape a
     single-mmap-then-slurp binary is actually specified against: a
@@ -929,9 +907,11 @@ theorem rz_mmap_drain_det (cap : Nat) (Hcap : (cap : Int) < 2 ^ 64)
                       (Tfin (stream_firstn (m_stdin model) cap)))) := by
   refine realizes.rz_conseq _ _ _ (rz_mmap_drain segs cap Hcap Hcap_modeled LH Tfin
     Hfull Hread ms0 ms model x8 bf cf Hh Hlazy Hfd Hms Hsvc Hno Hargs Hfail Hsucc Hex Hbf) ?_
-  exact t_alt2_cong _ _ _ _ (t_eq_refl _)
+  exact t_alt2_congr _ _ _ _ (t_eq_refl _)
     (t_drain_top_collapse cap Hcap Tfin Htfin_ne (m_stdin model))
 
 end Drain
 
 end WithSegs
+
+

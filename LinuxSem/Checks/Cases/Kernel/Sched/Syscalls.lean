@@ -59,6 +59,7 @@ import LinuxSem.Checks.Cases.Kernel.Sys
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.Checks.Sys.Kernel.Sched.Syscalls
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Sched.Syscalls
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -83,22 +84,10 @@ open LinuxSem.Checks.Cases.Kernel.Sys
 
 namespace LinuxSem.Checks.Cases.Kernel.Sched.Syscalls
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each is a transparent alias, so no statement below changes meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
+/-! `bv_unsigned`, `Z_to_bv`, `zleb`/`zltb` come from
+    `LinuxSem.Common.RocqSpelling`, opened above. -/
 
 /-- `<=?` on `Z`. -/
 local infix:50 " <=? " => zleb

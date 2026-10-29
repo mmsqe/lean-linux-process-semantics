@@ -29,8 +29,9 @@
   effects and not an `if`) the one place the older spelling survives.
 
   Each proof peels the spec's `get_model`/`input` readers with
-  `bind_getModel` and with the `bind_inputSpec` lemma below — one `↔`
-  covering both directions and both outcome shapes, so
+  `bind_getModel` and with `bind_inputSpec` (the canonical
+  `LinuxSem.LinuxProcessSem` one, reached through the `open` below) — one
+  `↔` covering both directions and both outcome shapes, so
   `simp only [bind_inputSpec]` peels it wherever it sits.  `dsimp only`
   performs the beta/iota/zeta reduction, and a `CheckUnmodeled = CheckOk`
   equation is eliminated by `nomatch`.
@@ -280,66 +281,17 @@ def check_tgkill (tgid pid sig : word) (eff : SyscallEffect) (m : Model)
    file.
    ========================================================================= -/
 
-/-- Peel the spec's `input` reader, in BOTH directions and for either
-    outcome shape.  One iff covers both directions, so
-    `simp only [bind_inputSpec]` performs the step wherever the `bind`
-    sits. -/
-theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-    constructor
-    · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-      simp only [inputSpec, LinuxSem.LinuxProcessSem.input,
-        Outcome.ok.injEq] at h1
-      obtain ⟨rfl, rfl, rfl⟩ := h1
-      simp only [List.nil_append] at h3
-      subst h3
-      exact h2
-    · intro h
-      exact ⟨i, m, [], evs, rfl, h, by simp⟩
-  | unmodeled =>
-    constructor
-    · rintro (h | ⟨x, m1, evs1, h1, h2⟩)
-      · simp only [inputSpec, LinuxSem.LinuxProcessSem.input] at h
-        exact nomatch h
-      · simp only [inputSpec, LinuxSem.LinuxProcessSem.input,
-          Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        exact h2
-    · intro h
-      exact Or.inr ⟨i, m, [], rfl, h⟩
-
-/-- Invert one `seqSpec (modifySpec f) (ret_only r)` step: the effect is
-    the single return [r], the model is [f m], and nothing is emitted. -/
-theorem seqSpec_modifySpec_ret_only_inv (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (modifySpec f) (ret_only r) i m (.ok eff m' evs)) :
-    eff = mkEffect r [] [] ∧ m' = f m ∧ evs = [] := by
-  obtain ⟨u, m2, evs1, evs2, hm, hr, hevs⟩ := H
-  cases hm
-  cases hr
-  simp only [List.nil_append] at hevs
-  exact ⟨rfl, rfl, hevs⟩
+/- `bind_inputSpec` — peel the spec's `input` reader, in BOTH directions
+   and for either outcome shape, so `simp only [bind_inputSpec]` performs
+   the step wherever the `bind` sits — is the canonical
+   `LinuxSem.LinuxProcessSem.bind_inputSpec`, reached through the `open`
+   above. -/
 
 /-- …and build the same step on the goal side. -/
 theorem seqSpec_modifySpec_ret_only_ok (f : Model → Model) (r : word)
     (i : SyscallInput) (m : Model) :
     seqSpec (modifySpec f) (ret_only r) i m (.ok (mkEffect r [] []) (f m) []) :=
   ⟨(), f m, [], [], rfl, rfl, by simp⟩
-
-/-- …and that it never declines: both halves are a state write and a
-    `pure`. -/
-theorem seqSpec_modifySpec_ret_only_no_unmodeled (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) :
-    ¬ seqSpec (modifySpec f) (ret_only r) i m .unmodeled := by
-  intro H
-  rcases H with h | ⟨u, m1, evs1, h, hk⟩
-  · simp only [modifySpec, LinuxSem.LinuxProcessSem.modify] at h
-    exact nomatch h
-  · simp only [ret_only, LinuxSem.LinuxProcessSem.pure] at hk
-    exact nomatch hk
 
 /-- One `seqSpec (modifySpec f) k` step, both directions and either
     outcome shape: the state write always answers, so the step is [k] at
@@ -581,7 +533,7 @@ theorem check_sigaltstack_complete_ok (i : SyscallInput) (uss uoss : word)
                     bv_eqb_refl, ite_eq_left]
                 · rw [ite_eq_right hsz] at H
                   obtain ⟨heff, hm', hevs⟩ :=
-                    seqSpec_modifySpec_ret_only_inv with_sigaltstack_installed
+                    seqSpec_modify_ret_only_inv with_sigaltstack_installed
                       (BitVec.ofInt 64 0) i m eff m' evs H
                   subst heff; subst hm'; subst hevs
                   rw [← hP]
@@ -639,7 +591,7 @@ theorem check_sigaltstack_complete_unmodeled (i : SyscallInput) (uss uoss : word
                   simp only [err_ret, ret_only, LinuxSem.LinuxProcessSem.pure] at H
                   exact nomatch H
                 · rw [ite_eq_right hsz] at H
-                  exact absurd H (seqSpec_modifySpec_ret_only_no_unmodeled _
+                  exact absurd H (seqSpec_modify_ret_only_never_unmodeled _
                     (BitVec.ofInt 64 0) i m)
 
 theorem check_rt_sigaction_sound_ok (i : SyscallInput) (sig act oact ss : word)
@@ -1376,7 +1328,7 @@ theorem check_rt_sigprocmask_complete_ok (i : SyscallInput) (how nset oset ss : 
               (seqSpec (set_sigmask_deliver
                   (sigmask_apply how (m_sigmask m) (sigmask_strip raw)))
                 (ret_only (BitVec.ofInt 64 0))) i m eff m' evs H
-            obtain ⟨hcore, hm', hevs'⟩ := seqSpec_modifySpec_ret_only_inv
+            obtain ⟨hcore, hm', hevs'⟩ := seqSpec_modify_ret_only_inv
               (sigmask_deliver_model (sigmask_apply how (m_sigmask m) (sigmask_strip raw)))
               (BitVec.ofInt 64 0) i m core m' evs Hcore
             rw [hcore] at heffc
@@ -1794,13 +1746,13 @@ theorem check_send_sigabrt_complete_ok (eff : SyscallEffect) (m m' : Model)
   simp only [send_sigabrt, getModelSpec, bind_getModel] at H
   by_cases hb : sigabrt_blocked (m_sigmask m) = true
   · rw [ite_eq_left hb] at H
-    obtain ⟨hcore, hm', hevs'⟩ := seqSpec_modifySpec_ret_only_inv with_sigabrt_pending
+    obtain ⟨hcore, hm', hevs'⟩ := seqSpec_modify_ret_only_inv with_sigabrt_pending
       (BitVec.ofInt 64 0) i m eff m' evs H
     rw [hcore, hm', hevs'] at hP
     rw [← hP]
     simp [check_send_sigabrt, hb]
   · rw [ite_eq_right hb] at H
-    obtain ⟨hcore, hm', hevs'⟩ := seqSpec_modifySpec_ret_only_inv
+    obtain ⟨hcore, hm', hevs'⟩ := seqSpec_modify_ret_only_inv
       (with_killed (BitVec.ofInt 64 SIGABRT)) (BitVec.ofInt 64 0) i m eff m' evs H
     rw [hcore, hm', hevs'] at hP
     rw [← hP]
@@ -1813,10 +1765,10 @@ theorem check_send_sigabrt_complete_unmodeled (m : Model) (i : SyscallInput)
   simp only [send_sigabrt, getModelSpec, bind_getModel] at H
   by_cases hb : sigabrt_blocked (m_sigmask m) = true
   · rw [ite_eq_left hb] at H
-    exact absurd H (seqSpec_modifySpec_ret_only_no_unmodeled with_sigabrt_pending
+    exact absurd H (seqSpec_modify_ret_only_never_unmodeled with_sigabrt_pending
       (BitVec.ofInt 64 0) i m)
   · rw [ite_eq_right hb] at H
-    exact absurd H (seqSpec_modifySpec_ret_only_no_unmodeled
+    exact absurd H (seqSpec_modify_ret_only_never_unmodeled
       (with_killed (BitVec.ofInt 64 SIGABRT)) (BitVec.ofInt 64 0) i m)
 
 theorem check_tkill_self_sound_ok (pid sig : word) (eff : SyscallEffect)
@@ -2485,3 +2437,7 @@ example (i : SyscallInput) (oset old : word) (eff : SyscallEffect) (m : Model)
   rw [check_write_oset, ite_eq_left (by rw [h]; rfl)]
 
 end LinuxSem.Checks.Sys.Kernel.Signal
+
+
+
+

@@ -21,6 +21,7 @@
 
 
 import LinuxSem.Checks.ExecutableSpecs
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Checks.Sys.Fs.Readdir
 import LinuxSem.LinuxProcessSem.Run
 import LinuxSem.LinuxProcessSem.StackLayout
@@ -78,11 +79,12 @@ open LinuxSem.Checks.Sys.Kernel.Time.Time
 open LinuxSem.Checks.Sys.Net.Socket
 
 namespace LinuxSem.Checks.VmMapsDisjoint
-/-! ## The prelude's abbreviations, restored -/
 
-/-- `bv_unsigned`: the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
+open LinuxSem.Common.RocqSpelling
+
+/- `bv_unsigned`, `Z_to_bv`, `zeqb`, `zleb`, `zltb`: the shared Rocq
+   spellings, from `LinuxSem.Common.RocqSpelling` (imported and opened
+   here). -/
 
 /-- The `bv_unsigned` abbreviation as a REWRITE rule.  `bv_unsigned` is an
     `abbrev`, so `simp only [bv_unsigned]` does not pick it up, while
@@ -90,18 +92,6 @@ abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
     — this states the bridge in the one spelling both
     accept. -/
 theorem bv_unsigned_def {n : Nat} (w : BitVec n) : bv_unsigned w = (w.toNat : Int) := rfl
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`). -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
 
 /-- `negb` (`Bool.negb`). -/
 abbrev negb (b : Bool) : Bool := !b
@@ -598,15 +588,6 @@ theorem region_free_no_owner (maps : List (word × word)) (a n : word) (p : Int)
       simp at Hfree
     · rw [ite_eq_right hb]
       simpa using ih Hfree.2
-
-theorem region_free_app_r (l1 l2 : List (word × word)) (lo n : word)
-    (H : region_free (l1 ++ l2) lo n = true) : region_free l2 lo n = true := by
-  induction l1 with
-  | nil => simpa using H
-  | cons hd r ih =>
-    obtain ⟨b, s⟩ := hd
-    simp only [List.cons_append, region_free, Bool.and_eq_true] at H
-    exact ih H.2
 
 theorem owners_app (l1 l2 : List (word × word)) (p : Int) :
     owners (l1 ++ l2) p = owners l1 p + owners l2 p := by
@@ -1567,3 +1548,4 @@ theorem init_model_vm_wf (reserved : List (word × word)) (brk0 mbase sp : word)
     simp [owners]
 
 end LinuxSem.Checks.VmMapsDisjoint
+

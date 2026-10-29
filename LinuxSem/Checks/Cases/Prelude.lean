@@ -346,7 +346,7 @@ theorem at_fdcwd32_is_the_low_half_of_minus_100 :
     relative-to-a-dirfd open, and still fails closed. -/
 def wpast_model : Model :=
   mkModel [(3, FdEntry.FdFileW [102] 4)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [104, 105])] none none none
+    [([102], [104, 105])]
 
 /-- write(3, buf, 0) at that offset transfers nothing and leaves both the
     file and the fd offset alone, as on Linux.  [Fs.file_write] does not

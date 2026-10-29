@@ -914,7 +914,7 @@ private def check_input : SyscallInput :=
 
 /-- `mkModel`'s default: no descriptors, no tid, no child. -/
 private def check_model : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-! ### `set_tid_address` — chosen once, then read -/
 
@@ -1053,7 +1053,6 @@ example : clone_no_shared_file_b [(fw 3, FdEntry.FdUrandom)] = true := by decide
     recorded.  That is the parent-only model's one gate on descriptors. -/
 private def check_model_file : Model :=
   mkModel [(fw 3, FdEntry.FdFile path_a (fw 0))] (mkVmMaps [] [] 0 0 0) IEof []
-    none none none
 
 example (i : SyscallInput) : clone_spec (fw 17) i check_model_file .unmodeled := by
   have hflags : clone_fork_flags_b (fw 17) = true := by decide

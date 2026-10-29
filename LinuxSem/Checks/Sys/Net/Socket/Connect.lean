@@ -47,7 +47,7 @@
   The spec writes `err_ret EINVAL` where the checker writes
   `check_ret_only eff (errno_ret EINVAL) m []`.  Each spec arm below is
   stated in the form the spec itself uses, and the bridge lemmas
-  (`connect_arm_ok`, `connect_arm_copyins_ok`, …) cross from the checker
+  (`arm_ok`, `arm_copyins_ok`, …) cross from the checker
   form at the `errno_ret` word, which is definitionally the same effect.
 
   In the spec the `-ENOTSOCK` arm sits BELOW the copy, so it is
@@ -58,10 +58,11 @@
   not share with `bind`, and it is why the ledger is threaded through five
   of the seven arm shapes below.
 
-  `connect_bind_inputSpec`, `connect_ret_only_ok_inv`, `connect_arm_ok`,
-  `connect_arm_check_ok`, `connect_ret_only_ne_unmodeled`,
-  `connect_arm_copyins_ok`, `connect_arm_copyins_check_ok` and
-  `connect_record_copyins_unmodeled_intro` are `private` in the parent file
+  `bind_inputSpec` (from `LinuxProcessSem`) and `arm_ok` / `arm_check_ok`
+  (from `Checks.Sys.Prelude`) are public, so this file cites them directly.
+  `ret_only_ok_inv`, `ret_only_ne_unmodeled`,
+  `arm_copyins_ok`, `arm_copyins_check_ok` and
+  `record_copyins_unmodeled_intro` are `private` in the parent file
   (or in `Checks/Sys/Fs/Pipe.lean`), so a sibling module cannot cite them;
   they are restated here verbatim under a `connect_` prefix, as
   `Socket/Socket.lean` did with `socket_lowest_fd_*`.  When the parent's are
@@ -91,7 +92,7 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
   (rw_bytes_max modeled_rw_count access_ok_zero)
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff lowest_fd)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite (UIO_FASTIOV)
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket
 open LinuxSem.Checks.Sys.Prelude
@@ -101,113 +102,15 @@ open LinuxSem.Checks.Sys.Uaccess (check_access_ok_zero)
    The arm bridges
    ========================================================================= -/
 
-/-- The prologue peel: `i <- input ;; m <- get_model` reads the input and
-    the model it started in, so the body is stated at `i` and `m`.  The
-    same lemma as `Checks/Sys/Fs/Pipe.lean`'s (private) `bind_inputSpec`,
-    and the `simp` form of the `bind_step` + `input_ok` + `get_model_ok`
-    sequence. -/
-private theorem connect_bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-      simp only [LinuxSem.LinuxProcessSem.bind]
-      constructor
-      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-        simp only [inputSpec, input, Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        simp only [List.nil_append] at h3
-        subst h3
-        exact h2
-      · intro h
-        exact ⟨i, m, [], evs, rfl, h, by simp⟩
-  | unmodeled =>
-      simp only [LinuxSem.LinuxProcessSem.bind]
-      constructor
-      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
-        · exact absurd h (by simp [inputSpec, input])
-        · simp only [inputSpec, input, Outcome.ok.injEq] at h1
-          obtain ⟨rfl, rfl, rfl⟩ := h1
-          exact h2
-      · intro h
-        exact Or.inr ⟨i, m, [], rfl, h⟩
+/- The prologue peel — the `simp` form of the `bind_step` + `input_ok` +
+   `get_model_ok` sequence — is `LinuxSem.LinuxProcessSem.bind_inputSpec`,
+   opened above; the same lemma that `Checks/Sys/Fs/Pipe.lean` states
+   privately. -/
 
-/-- Read back the effect of an accepted `ret_only`: the word, the model,
-    the events — and nothing else.  The parent file's `ret_only_ok_inv`. -/
-private theorem connect_ret_only_ok_inv (r : word) (i : SyscallInput) (m : Model)
-    (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    eff = mkEffect r [] [] ∧ m' = m ∧ evs = [] := by
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  simp only [Outcome.ok.injEq] at H
-  exact ⟨H.1, H.2.1, H.2.2⟩
-
-/-- The introduction form of `ret_only` at its own word. -/
-private theorem connect_ret_only_ok (r : word) (i : SyscallInput) (m : Model) :
-    ret_only r i m (.ok (mkEffect r [] []) m []) := by
-  unfold ret_only LinuxSem.LinuxProcessSem.pure
-  rfl
-
-/-- Checker → spec, for one arm answering through `check_ret_only`: an
-    accepted `check_ret_only` *is* the spec's `ret_only` at that word,
-    with the claimed model and events. -/
-private theorem connect_arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨heff, hm, hevs⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rw [heff, hm, hevs]
-  exact connect_ret_only_ok r i m
-
-/-- Spec → checker for the same arm. -/
-private theorem connect_arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨heff, hm, hevs⟩ := connect_ret_only_ok_inv r i m eff m' evs H
-  rw [heff, hm, hevs]
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- `ret_only` — hence `err_ret` — never declines: `pure` has one outcome
-    shape. -/
-private theorem connect_ret_only_ne_unmodeled (r : word) (i : SyscallInput)
-    (m : Model) : ¬ ret_only r i m .unmodeled := by
-  intro H
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  exact nomatch H
-
-/-- Checker → spec, for one arm that answers after recording a ledger:
-    `check_ret_only_copyins` at `r` *is* the spec's `record_copyins` of
-    `ret_only r` at the same word. -/
-private theorem connect_arm_copyins_ok (reads : List (word × Nat)) (r : word)
-    (eff : SyscallEffect) (m m' : Model) (evs : List event) (i : SyscallInput)
-    (H : check_ret_only_copyins reads eff r m [] = .CheckOk m' evs) :
-    record_copyins reads (ret_only r) i m (.ok eff m' evs) := by
-  obtain ⟨heff, hm, hevs⟩ :=
-    (check_ret_only_copyins_ok_iff reads eff r m [] m' evs).mp H
-  rw [heff, hm, hevs]
-  exact record_copyins_clear_ok reads (ret_only r) i m _ m [] rfl (connect_ret_only_ok r i m)
-
-/-- Spec → checker for the same arm. -/
-private theorem connect_arm_copyins_check_ok (reads : List (word × Nat)) (r : word)
-    (eff : SyscallEffect) (m m' : Model) (evs : List event) (i : SyscallInput)
-    (H : record_copyins reads (ret_only r) i m (.ok eff m' evs)) :
-    check_ret_only_copyins reads eff r m [] = .CheckOk m' evs := by
-  obtain ⟨core, Hcore, hEff⟩ := record_copyins_ok_inv reads (ret_only r) i m eff m' evs H
-  obtain ⟨hcore, hm', hevs⟩ := connect_ret_only_ok_inv r i m core m' evs Hcore
-  rw [hcore] at hEff
-  rw [hEff, hm', hevs]
-  refine (check_ret_only_copyins_ok_iff reads _ r m [] m []).mpr ⟨?_, rfl, rfl⟩
-  simp [with_copyins]
-
-/-- `record_copyins` propagates a declining body: it only wraps the `ok`
-    shape. -/
-private theorem connect_record_copyins_unmodeled_intro (reads : List (word × Nat))
-    (spec : SysSpec SyscallEffect) (i : SyscallInput) (m : Model)
-    (H : spec i m .unmodeled) :
-    record_copyins reads spec i m .unmodeled := by
-  unfold record_copyins LinuxSem.LinuxProcessSem.bind
-  exact Or.inl H
+/- The two arm bridges that used to sit here — `connect_arm_ok` and
+   `connect_arm_check_ok` — are now the public `arm_ok` / `arm_check_ok` in
+   `Checks.Sys.Prelude`, opened above; the statements are identical, so this
+   file cites them directly. -/
 
 /-- A ledger over a declining body declines, and conversely: `record_copyins`
     only wraps the `ok` shape, so an arm whose body is `unmodeled` is the
@@ -227,7 +130,7 @@ private theorem connect_record_copyins_unmodeled_iff (reads : List (word × Nat)
         exact nomatch H
   | unmodeled =>
       exact ⟨fun H => record_copyins_unmodeled_inv reads unmodeled i m H,
-        fun H => connect_record_copyins_unmodeled_intro reads unmodeled i m H⟩
+        fun H => record_copyins_unmodeled_intro reads unmodeled i m H⟩
 
 /- =========================================================================
    One arm of `connect_spec` per lemma
@@ -249,7 +152,7 @@ private theorem connect_spec_ebadf (i : SyscallInput) (fd addrp addrlen : word)
     (m : Model) {o : Outcome SyscallEffect Model event}
     (hfd : fd_lookup (m_fds m) fd = none) :
     connect_spec fd addrp addrlen i m o ↔ err_ret EBADF i m o := by
-  simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hfd]
+  simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hfd]
 
 /-- `addrlen` is negative or larger than `sockaddr_storage`: -EINVAL,
     above the copy and above the `FdEntry` dispatch, so it is generic in
@@ -260,7 +163,7 @@ private theorem connect_spec_guard (i : SyscallInput) (fd addrp addrlen : word)
     (hfd : fd_lookup (m_fds m) fd = some e)
     (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = true) :
     connect_spec fd addrp addrlen i m o ↔ err_ret EINVAL i m o := by
-  simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+  simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
     ite_true]
 
 /-- `copy_from_user` of the address failed: -EFAULT, still above the
@@ -272,7 +175,7 @@ private theorem connect_spec_efault (i : SyscallInput) (fd addrp addrlen : word)
     (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
     (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = none) :
     connect_spec fd addrp addrlen i m o ↔ err_ret EFAULT i m o := by
-  simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+  simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
     Bool.false_eq_true, ite_false, hrb]
 
 /-- A socket descriptor whose `addrlen` does not even cover the address
@@ -286,7 +189,7 @@ private theorem connect_spec_family (i : SyscallInput) (fd addrp addrlen : word)
     (hs : decide (av < SA_FAMILY_SIZE) = true) :
     connect_spec fd addrp addrlen i m o ↔
       record_copyins (if av == 0 then [] else [(addrp, bs.length)]) (err_ret EINVAL) i m o := by
-  simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+  simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
     Bool.false_eq_true, ite_false, hrb, hs, ite_true]
 
 /-- `sa_family == AF_UNSPEC`: `tcp_disconnect` on a fresh socket is a
@@ -302,7 +205,7 @@ private theorem connect_spec_unspec_fresh (i : SyscallInput) (fd addrp addrlen :
     connect_spec fd addrp addrlen i m o ↔
       record_copyins (if av == 0 then [] else [(addrp, bs.length)])
         (ret_only (BitVec.ofInt 64 0)) i m o := by
-  simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+  simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
     Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false, hfam, ite_true]
 
 /-- `sa_family == AF_UNSPEC` on any socket that is not fresh: a REAL
@@ -321,7 +224,7 @@ private theorem connect_spec_unspec_other (i : SyscallInput) (fd addrp addrlen :
   cases sk with
   | SkFresh => exact absurd rfl hsk
   | _ =>
-      simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+      simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
         Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false, hfam, ite_true,
         connect_record_copyins_unmodeled_iff]
 
@@ -344,7 +247,7 @@ private theorem connect_spec_eisconn (i : SyscallInput) (fd addrp addrlen : word
   | SkFresh => exact absurd rfl hsk1
   | SkBound => exact absurd rfl hsk2
   | _ =>
-      simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+      simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
         Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false, hfam,
         Bool.false_eq_true, ite_false]
 
@@ -363,7 +266,7 @@ private theorem connect_spec_inet_einval (i : SyscallInput) (fd addrp addrlen : 
     connect_spec fd addrp addrlen i m o ↔
       record_copyins (if av == 0 then [] else [(addrp, bs.length)]) (err_ret EINVAL) i m o := by
   rcases hsk with rfl | rfl <;>
-    simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+    simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
       Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false, hfam,
       Bool.false_eq_true, ite_false, hi, ite_true]
 
@@ -384,7 +287,7 @@ private theorem connect_spec_inet_eafnosupport (i : SyscallInput) (fd addrp addr
       record_copyins (if av == 0 then [] else [(addrp, bs.length)])
         (err_ret EAFNOSUPPORT) i m o := by
   rcases hsk with rfl | rfl <;>
-    simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+    simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
       Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false, hfam,
       Bool.false_eq_true, ite_false, hi, Bool.false_eq_true, ite_false, hf, ite_true]
 
@@ -403,7 +306,7 @@ private theorem connect_spec_inet_unmodeled (i : SyscallInput) (fd addrp addrlen
     (hf : (!(sa_family_of bs == AF_INET)) = false) :
     connect_spec fd addrp addrlen i m o ↔ unmodeled i m o := by
   rcases hsk with rfl | rfl <;>
-    simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+    simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
       Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false, hfam,
       Bool.false_eq_true, ite_false, hi, Bool.false_eq_true, ite_false, hf,
       Bool.false_eq_true, ite_false, connect_record_copyins_unmodeled_iff]
@@ -425,7 +328,7 @@ private theorem connect_spec_enotsock (i : SyscallInput) (fd addrp addrlen : wor
   cases e with
   | FdSocket sk => exact absurd rfl (hns sk)
   | _ =>
-      simp only [connect_spec, connect_bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
+      simp only [connect_spec, bind_inputSpec, getModelSpec, bind_getModel, hal, hfd, hg,
         Bool.false_eq_true, ite_false, hrb]
 
 /- =========================================================================
@@ -448,7 +351,7 @@ private theorem connect_spec_enotsock (i : SyscallInput) (fd addrp addrlen : wor
    ========================================================================= -/
 
 /-- The `-EBADF` arm. -/
-private theorem connect_chk_ebadf (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_ebadf (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model)
     (hfd : fd_lookup (m_fds m) fd = none) :
     check_connect i fd addrp addrlen eff m = check_ret_only eff (errno_ret EBADF) m [] := by
@@ -456,7 +359,7 @@ private theorem connect_chk_ebadf (i : SyscallInput) (fd addrp addrlen : word)
   simp only [hfd]
 
 /-- The `addrlen` out-of-range arm. -/
-private theorem connect_chk_guard (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_guard (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (e : FdEntry) (av : Int)
     (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some e)
@@ -466,7 +369,7 @@ private theorem connect_chk_guard (i : SyscallInput) (fd addrp addrlen : word)
   simp only [hal, hfd, hg, ite_true]
 
 /-- The `-EFAULT` arm. -/
-private theorem connect_chk_efault (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_efault (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (e : FdEntry) (av : Int)
     (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some e)
@@ -477,7 +380,7 @@ private theorem connect_chk_efault (i : SyscallInput) (fd addrp addrlen : word)
   simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb]
 
 /-- The short-`addrlen` socket arm. -/
-private theorem connect_chk_family (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_family (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
@@ -491,7 +394,7 @@ private theorem connect_chk_family (i : SyscallInput) (fd addrp addrlen : word)
   simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, ite_true]
 
 /-- The `AF_UNSPEC` fresh-socket arm. -/
-private theorem connect_chk_unspec_fresh (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_unspec_fresh (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket .SkFresh))
@@ -507,7 +410,7 @@ private theorem connect_chk_unspec_fresh (i : SyscallInput) (fd addrp addrlen : 
     hfam, ite_true]
 
 /-- The `AF_UNSPEC` declining arm. -/
-private theorem connect_chk_unspec_other (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_unspec_other (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
@@ -525,7 +428,7 @@ private theorem connect_chk_unspec_other (i : SyscallInput) (fd addrp addrlen : 
         hfam, ite_true]
 
 /-- The `-EISCONN` arm. -/
-private theorem connect_chk_eisconn (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_eisconn (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
@@ -546,7 +449,7 @@ private theorem connect_chk_eisconn (i : SyscallInput) (fd addrp addrlen : word)
         hfam, Bool.false_eq_true, ite_false]
 
 /-- The `-EINVAL` short-`sockaddr_in` arm. -/
-private theorem connect_chk_inet_einval (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_inet_einval (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
@@ -565,7 +468,7 @@ private theorem connect_chk_inet_einval (i : SyscallInput) (fd addrp addrlen : w
       hfam, Bool.false_eq_true, ite_false, hi, ite_true]
 
 /-- The `-EAFNOSUPPORT` arm. -/
-private theorem connect_chk_inet_eafnosupport (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_inet_eafnosupport (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
@@ -585,7 +488,7 @@ private theorem connect_chk_inet_eafnosupport (i : SyscallInput) (fd addrp addrl
       hfam, Bool.false_eq_true, ite_false, hi, Bool.false_eq_true, ite_false, hf, ite_true]
 
 /-- The declining `tcp_v4_connect` arm. -/
-private theorem connect_chk_inet_unmodeled (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_inet_unmodeled (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
     (av : Int) (hal : sint32 addrlen = av)
     (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
@@ -604,7 +507,7 @@ private theorem connect_chk_inet_unmodeled (i : SyscallInput) (fd addrp addrlen 
       Bool.false_eq_true, ite_false]
 
 /-- The `-ENOTSOCK` arm. -/
-private theorem connect_chk_enotsock (i : SyscallInput) (fd addrp addrlen : word)
+theorem connect_chk_enotsock (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model) (e : FdEntry)
     (hns : ∀ s, e ≠ .FdSocket s)
     (av : Int) (hal : sint32 addrlen = av)
@@ -639,7 +542,7 @@ theorem check_connect_sound_ok (i : SyscallInput) (fd addrp addrlen : word)
   | none =>
     rw [connect_chk_ebadf i fd addrp addrlen eff m hfd] at H
     exact (connect_spec_ebadf i fd addrp addrlen m hfd).mpr
-      (connect_arm_ok (errno_ret EBADF) eff m m' evs i H)
+      (arm_ok (errno_ret EBADF) eff m m' evs i H)
   | some e =>
     cases hg : (decide (sint32 addrlen < 0) || decide (SOCKADDR_STORAGE_SIZE < sint32 addrlen)) with
     | false =>
@@ -647,7 +550,7 @@ theorem check_connect_sound_ok (i : SyscallInput) (fd addrp addrlen : word)
       | none =>
         rw [connect_chk_efault i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg hrb] at H
         exact (connect_spec_efault i fd addrp addrlen m e (sint32 addrlen) rfl hfd hg hrb).mpr
-          (connect_arm_ok (errno_ret EFAULT) eff m m' evs i H)
+          (arm_ok (errno_ret EFAULT) eff m m' evs i H)
       | some bs =>
         cases e with
         | FdSocket sk =>
@@ -669,13 +572,13 @@ theorem check_connect_sound_ok (i : SyscallInput) (fd addrp addrlen : word)
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inl rfl) hi hf] at H
                     exact (connect_spec_inet_eafnosupport i fd addrp addrlen m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inl rfl) hi hf).mpr
-                      (connect_arm_copyins_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i H)
+                      (arm_copyins_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i H)
                 | true =>
                   rw [connect_chk_inet_einval i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl
                     hfd hg hrb hs hfam (Or.inl rfl) hi] at H
                   exact (connect_spec_inet_einval i fd addrp addrlen m _ bs (sint32 addrlen) rfl
                     hfd hg hrb hs hfam (Or.inl rfl) hi).mpr
-                    (connect_arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H)
+                    (arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H)
               | SkBound =>
                 cases hi : decide (sint32 addrlen < SOCKADDR_IN_SIZE) with
                 | false =>
@@ -689,19 +592,19 @@ theorem check_connect_sound_ok (i : SyscallInput) (fd addrp addrlen : word)
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inr rfl) hi hf] at H
                     exact (connect_spec_inet_eafnosupport i fd addrp addrlen m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inr rfl) hi hf).mpr
-                      (connect_arm_copyins_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i H)
+                      (arm_copyins_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i H)
                 | true =>
                   rw [connect_chk_inet_einval i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl
                     hfd hg hrb hs hfam (Or.inr rfl) hi] at H
                   exact (connect_spec_inet_einval i fd addrp addrlen m _ bs (sint32 addrlen) rfl
                     hfd hg hrb hs hfam (Or.inr rfl) hi).mpr
-                    (connect_arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H)
+                    (arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H)
               | _ =>
                 rw [connect_chk_eisconn i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl hfd hg
                   hrb hs hfam (by intro h; cases h) (by intro h; cases h)] at H
                 exact (connect_spec_eisconn i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg
                   hrb hs hfam (by intro h; cases h) (by intro h; cases h)).mpr
-                  (connect_arm_copyins_ok _ (errno_ret EISCONN) eff m m' evs i H)
+                  (arm_copyins_ok _ (errno_ret EISCONN) eff m m' evs i H)
             | true =>
               cases sk with
               | SkFresh =>
@@ -709,7 +612,7 @@ theorem check_connect_sound_ok (i : SyscallInput) (fd addrp addrlen : word)
                   hrb hs hfam] at H
                 exact (connect_spec_unspec_fresh i fd addrp addrlen m bs (sint32 addrlen) rfl hfd hg
                   hrb hs hfam).mpr
-                  (connect_arm_copyins_ok _ (BitVec.ofInt 64 0) eff m m' evs i H)
+                  (arm_copyins_ok _ (BitVec.ofInt 64 0) eff m m' evs i H)
               | _ =>
                 rw [connect_chk_unspec_other i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl hfd
                   hg hrb hs hfam (by intro h; cases h)] at H
@@ -718,17 +621,17 @@ theorem check_connect_sound_ok (i : SyscallInput) (fd addrp addrlen : word)
             rw [connect_chk_family i fd addrp addrlen eff m sk bs (sint32 addrlen) rfl hfd hg hrb
               hs] at H
             exact (connect_spec_family i fd addrp addrlen m sk bs (sint32 addrlen) rfl hfd hg hrb
-              hs).mpr (connect_arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H)
+              hs).mpr (arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H)
         | _ =>
           rw [connect_chk_enotsock i fd addrp addrlen eff m _ (by rintro s h; cases h)
             (sint32 addrlen) rfl hfd hg bs hrb] at H
           exact (connect_spec_enotsock i fd addrp addrlen m hfd (by rintro s h; cases h)
             (sint32 addrlen) rfl hg bs hrb).mpr
-            (connect_arm_copyins_ok _ (errno_ret ENOTSOCK) eff m m' evs i H)
+            (arm_copyins_ok _ (errno_ret ENOTSOCK) eff m m' evs i H)
     | true =>
       rw [connect_chk_guard i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg] at H
       exact (connect_spec_guard i fd addrp addrlen m e (sint32 addrlen) rfl hfd hg).mpr
-        (connect_arm_ok (errno_ret EINVAL) eff m m' evs i H)
+        (arm_ok (errno_ret EINVAL) eff m m' evs i H)
 
 theorem check_connect_sound_unmodeled (i : SyscallInput) (fd addrp addrlen : word)
     (eff : SyscallEffect) (m : Model)
@@ -823,7 +726,7 @@ theorem check_connect_complete_ok (i : SyscallInput) (fd addrp addrlen : word)
   cases hfd : fd_lookup (m_fds m) fd with
   | none =>
     rw [connect_chk_ebadf i fd addrp addrlen eff m hfd]
-    exact connect_arm_check_ok (errno_ret EBADF) eff m m' evs i
+    exact arm_check_ok (errno_ret EBADF) eff m m' evs i
       ((connect_spec_ebadf i fd addrp addrlen m hfd).mp H)
   | some e =>
     cases hg : (decide (sint32 addrlen < 0) || decide (SOCKADDR_STORAGE_SIZE < sint32 addrlen)) with
@@ -831,7 +734,7 @@ theorem check_connect_complete_ok (i : SyscallInput) (fd addrp addrlen : word)
       cases hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 (sint32 addrlen)) with
       | none =>
         rw [connect_chk_efault i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg hrb]
-        exact connect_arm_check_ok (errno_ret EFAULT) eff m m' evs i
+        exact arm_check_ok (errno_ret EFAULT) eff m m' evs i
           ((connect_spec_efault i fd addrp addrlen m e (sint32 addrlen) rfl hfd hg hrb).mp H)
       | some bs =>
         cases e with
@@ -851,13 +754,13 @@ theorem check_connect_complete_ok (i : SyscallInput) (fd addrp addrlen : word)
                   | true =>
                     rw [connect_chk_inet_eafnosupport i fd addrp addrlen eff m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inl rfl) hi hf]
-                    exact connect_arm_copyins_check_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i
+                    exact arm_copyins_check_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i
                       ((connect_spec_inet_eafnosupport i fd addrp addrlen m _ bs (sint32 addrlen) rfl
                         hfd hg hrb hs hfam (Or.inl rfl) hi hf).mp H)
                 | true =>
                   rw [connect_chk_inet_einval i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl
                     hfd hg hrb hs hfam (Or.inl rfl) hi]
-                  exact connect_arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i
+                  exact arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i
                     ((connect_spec_inet_einval i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg
                       hrb hs hfam (Or.inl rfl) hi).mp H)
               | SkBound =>
@@ -870,19 +773,19 @@ theorem check_connect_complete_ok (i : SyscallInput) (fd addrp addrlen : word)
                   | true =>
                     rw [connect_chk_inet_eafnosupport i fd addrp addrlen eff m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inr rfl) hi hf]
-                    exact connect_arm_copyins_check_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i
+                    exact arm_copyins_check_ok _ (errno_ret EAFNOSUPPORT) eff m m' evs i
                       ((connect_spec_inet_eafnosupport i fd addrp addrlen m _ bs (sint32 addrlen) rfl
                         hfd hg hrb hs hfam (Or.inr rfl) hi hf).mp H)
                 | true =>
                   rw [connect_chk_inet_einval i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl
                     hfd hg hrb hs hfam (Or.inr rfl) hi]
-                  exact connect_arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i
+                  exact arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i
                     ((connect_spec_inet_einval i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg
                       hrb hs hfam (Or.inr rfl) hi).mp H)
               | _ =>
                 rw [connect_chk_eisconn i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl hfd hg
                   hrb hs hfam (by intro h; cases h) (by intro h; cases h)]
-                exact connect_arm_copyins_check_ok _ (errno_ret EISCONN) eff m m' evs i
+                exact arm_copyins_check_ok _ (errno_ret EISCONN) eff m m' evs i
                   ((connect_spec_eisconn i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg hrb
                     hs hfam (by intro h; cases h) (by intro h; cases h)).mp H)
             | true =>
@@ -890,7 +793,7 @@ theorem check_connect_complete_ok (i : SyscallInput) (fd addrp addrlen : word)
               | SkFresh =>
                 rw [connect_chk_unspec_fresh i fd addrp addrlen eff m bs (sint32 addrlen) rfl hfd hg
                   hrb hs hfam]
-                exact connect_arm_copyins_check_ok _ (BitVec.ofInt 64 0) eff m m' evs i
+                exact arm_copyins_check_ok _ (BitVec.ofInt 64 0) eff m m' evs i
                   ((connect_spec_unspec_fresh i fd addrp addrlen m bs (sint32 addrlen) rfl hfd hg hrb
                     hs hfam).mp H)
               | _ =>
@@ -898,17 +801,17 @@ theorem check_connect_complete_ok (i : SyscallInput) (fd addrp addrlen : word)
                   rfl hfd hg hrb hs hfam (by intro h; cases h)).mp H)
           | true =>
             rw [connect_chk_family i fd addrp addrlen eff m sk bs (sint32 addrlen) rfl hfd hg hrb hs]
-            exact connect_arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i
+            exact arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i
               ((connect_spec_family i fd addrp addrlen m sk bs (sint32 addrlen) rfl hfd hg hrb hs).mp H)
         | _ =>
           rw [connect_chk_enotsock i fd addrp addrlen eff m _ (by rintro s h; cases h)
             (sint32 addrlen) rfl hfd hg bs hrb]
-          exact connect_arm_copyins_check_ok _ (errno_ret ENOTSOCK) eff m m' evs i
+          exact arm_copyins_check_ok _ (errno_ret ENOTSOCK) eff m m' evs i
             ((connect_spec_enotsock i fd addrp addrlen m hfd (by rintro s h; cases h)
               (sint32 addrlen) rfl hg bs hrb).mp H)
     | true =>
       rw [connect_chk_guard i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg]
-      exact connect_arm_check_ok (errno_ret EINVAL) eff m m' evs i
+      exact arm_check_ok (errno_ret EINVAL) eff m m' evs i
         ((connect_spec_guard i fd addrp addrlen m e (sint32 addrlen) rfl hfd hg).mp H)
 
 theorem check_connect_complete_unmodeled (i : SyscallInput) (fd addrp addrlen : word)
@@ -918,14 +821,14 @@ theorem check_connect_complete_unmodeled (i : SyscallInput) (fd addrp addrlen : 
   cases hfd : fd_lookup (m_fds m) fd with
   | none =>
     exact absurd ((connect_spec_ebadf i fd addrp addrlen m hfd).mp H)
-      (connect_ret_only_ne_unmodeled (errno_ret EBADF) i m)
+      (ret_only_ne_unmodeled (errno_ret EBADF) i m)
   | some e =>
     cases hg : (decide (sint32 addrlen < 0) || decide (SOCKADDR_STORAGE_SIZE < sint32 addrlen)) with
     | false =>
       cases hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 (sint32 addrlen)) with
       | none =>
         exact absurd ((connect_spec_efault i fd addrp addrlen m e (sint32 addrlen) rfl hfd hg hrb).mp H)
-          (connect_ret_only_ne_unmodeled (errno_ret EFAULT) i m)
+          (ret_only_ne_unmodeled (errno_ret EFAULT) i m)
       | some bs =>
         cases e with
         | FdSocket sk =>
@@ -945,12 +848,12 @@ theorem check_connect_complete_unmodeled (i : SyscallInput) (fd addrp addrlen : 
                     exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret EAFNOSUPPORT))
                       i m ((connect_spec_inet_eafnosupport i fd addrp addrlen m _ bs (sint32 addrlen)
                         rfl hfd hg hrb hs hfam (Or.inl rfl) hi hf).mp H))
-                      (connect_ret_only_ne_unmodeled (errno_ret EAFNOSUPPORT) i m)
+                      (ret_only_ne_unmodeled (errno_ret EAFNOSUPPORT) i m)
                 | true =>
                   exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret EINVAL)) i m
                     ((connect_spec_inet_einval i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg
                       hrb hs hfam (Or.inl rfl) hi).mp H))
-                    (connect_ret_only_ne_unmodeled (errno_ret EINVAL) i m)
+                    (ret_only_ne_unmodeled (errno_ret EINVAL) i m)
               | SkBound =>
                 cases hi : decide (sint32 addrlen < SOCKADDR_IN_SIZE) with
                 | false =>
@@ -962,38 +865,55 @@ theorem check_connect_complete_unmodeled (i : SyscallInput) (fd addrp addrlen : 
                     exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret EAFNOSUPPORT))
                       i m ((connect_spec_inet_eafnosupport i fd addrp addrlen m _ bs (sint32 addrlen)
                         rfl hfd hg hrb hs hfam (Or.inr rfl) hi hf).mp H))
-                      (connect_ret_only_ne_unmodeled (errno_ret EAFNOSUPPORT) i m)
+                      (ret_only_ne_unmodeled (errno_ret EAFNOSUPPORT) i m)
                 | true =>
                   exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret EINVAL)) i m
                     ((connect_spec_inet_einval i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg
                       hrb hs hfam (Or.inr rfl) hi).mp H))
-                    (connect_ret_only_ne_unmodeled (errno_ret EINVAL) i m)
+                    (ret_only_ne_unmodeled (errno_ret EINVAL) i m)
               | _ =>
                 exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret EISCONN)) i m
                   ((connect_spec_eisconn i fd addrp addrlen m _ bs (sint32 addrlen) rfl hfd hg hrb hs
                     hfam (by intro h; cases h) (by intro h; cases h)).mp H))
-                  (connect_ret_only_ne_unmodeled (errno_ret EISCONN) i m)
+                  (ret_only_ne_unmodeled (errno_ret EISCONN) i m)
             | true =>
               cases sk with
               | SkFresh =>
                 exact absurd (record_copyins_unmodeled_inv _ (ret_only (BitVec.ofInt 64 0)) i m
                   ((connect_spec_unspec_fresh i fd addrp addrlen m bs (sint32 addrlen) rfl hfd hg hrb
                     hs hfam).mp H))
-                  (connect_ret_only_ne_unmodeled (BitVec.ofInt 64 0) i m)
+                  (ret_only_ne_unmodeled (BitVec.ofInt 64 0) i m)
               | _ =>
                 rw [connect_chk_unspec_other i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl hfd
                   hg hrb hs hfam (by intro h; cases h)]
           | true =>
             exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret EINVAL)) i m
               ((connect_spec_family i fd addrp addrlen m sk bs (sint32 addrlen) rfl hfd hg hrb hs).mp H))
-              (connect_ret_only_ne_unmodeled (errno_ret EINVAL) i m)
+              (ret_only_ne_unmodeled (errno_ret EINVAL) i m)
         | _ =>
           exact absurd (record_copyins_unmodeled_inv _ (ret_only (errno_ret ENOTSOCK)) i m
             ((connect_spec_enotsock i fd addrp addrlen m hfd (by rintro s h; cases h)
               (sint32 addrlen) rfl hg bs hrb).mp H))
-            (connect_ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m)
+            (ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m)
     | true =>
       exact absurd ((connect_spec_guard i fd addrp addrlen m e (sint32 addrlen) rfl hfd hg).mp H)
-        (connect_ret_only_ne_unmodeled (errno_ret EINVAL) i m)
+        (ret_only_ne_unmodeled (errno_ret EINVAL) i m)
 
 end LinuxSem.Checks.Sys.Net.Socket
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -49,7 +49,6 @@ open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
-open LinuxSem.LinuxProcessSem.Sys.Fs.File
 open LinuxSem.LinuxProcessSem.Sys.Fs.EventFd
 open LinuxSem.Checks.Sys.Prelude
 
@@ -173,7 +172,7 @@ theorem check_eventfd2_complete_unmodeled (flags : word) (m : Model)
     in it can matter to eventfd2 — the answer is a function of the flag
     word alone. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- THE -EINVAL ARM: an unknown bit in the flag word is refused, and the
     bare return carries that errno and nothing else. -/

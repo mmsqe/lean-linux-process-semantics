@@ -362,7 +362,7 @@ theorem syscall_spec_brk (segs : List Segment) (ms : machine_state) (x8 : word)
     pages.  Package a VM ledger with that empty backing state for the pure
     outcome algebra below. -/
 def vm_model (h : VmMaps) : Model :=
-  mkModel [] h IEof [] none none none
+  mkModel [] h IEof []
 
 def brk_grow_ok (h : VmMaps) (req r : word) : Bool :=
   mmap_brk_grow_ok (vm_model h) req r
@@ -909,12 +909,8 @@ theorem region_free_below (l : List (word × word)) (lo n : word)
       omega, Bool.and_false]
     rfl
 
-/-- `BitVec.ofInt 64` of an unsigned value is that word. -/
-theorem ofInt_toNat (w : word) : BitVec.ofInt 64 (w.toNat : Int) = w := by
-  apply BitVec.eq_of_toNat_eq
-  rw [BitVec.toNat_ofInt,
-    Int.toNat_emod (Int.natCast_nonneg _) (by decide : (0 : Int) ≤ (((2 ^ 64 : Nat) : Int))),
-    Int.toNat_natCast, Int.toNat_natCast, Nat.mod_eq_of_lt w.isLt]
+/- `BitVec.ofInt 64` of an unsigned value is that word — the canonical
+   `BvBase.ofInt_toNat`, imported and opened here. -/
 
 /-- `BitVec.ofInt 64` of an `Int` in `[0, 2^64)` reads back as that value. -/
 theorem toNat_ofInt_range (z : Int) (Hlo : 0 ≤ z) (Hhi : z < ((2 ^ 64 : Nat) : Int)) :
@@ -1562,7 +1558,7 @@ theorem to_outcomes_exec (ms : machine_state) (model : Model)
         ms model Hh Hlazy (fd1chan_fdchan model hfd) hbm hte) ?_
     rintro tr o ⟨heq, hx⟩
     exact ⟨(bufs, code), (hU _).mpr rfl,
-      by rw [outcome_trace, ← wevents_ch_fd1]; exact heq, hx⟩
+      by rw [outcome_trace, ← wevents_ch_1]; exact heq, hx⟩
   | tou_step ms ms' model U hsvc hstep hto ih =>
     intro Hh Hlazy
     refine exec_step_only segs ⟨ms, model⟩ _ [] ⟨ms', model⟩ ?_ ?_ ?_
@@ -1674,7 +1670,7 @@ theorem to_outcomes_star_admits (ms : machine_state) (model : Model)
     intro Hh Hlazy o Ho
     have ho : o = (bufs, code) := (hU o).mp Ho
     subst ho
-    simpa only [outcome_trace, wevents_ch_fd1] using
+    simpa only [outcome_trace, wevents_ch_1] using
       to_wallexit_star_admits segs (BitVec.ofInt 64 1) (BitVec.ofInt 64 1) fd32_1
         bufs code ms model Hh Hlazy (fd1chan_fdchan model hfd) hbm hte
   | tou_step ms ms' model U hsvc hstep hto ih =>

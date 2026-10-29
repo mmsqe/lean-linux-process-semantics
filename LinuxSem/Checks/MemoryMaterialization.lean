@@ -28,6 +28,7 @@
   field; nothing else changes.
 -/
 import LinuxSem.Checks.ExecutableSpecs
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.LinuxProcessSem.StateVm
 import LinuxSem.LinuxProcessSem.StackLayout
 
@@ -42,10 +43,11 @@ open LinuxSem.Checks.Sys.Prelude (check_result)
 
 namespace LinuxSem.Checks.MemoryMaterialization
 
-/-- `bv_unsigned w` is `w`'s value as an integer, declared here as the other
-    `Checks` files declare it so that the statements below read in one
-    vocabulary. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
+open LinuxSem.Common.RocqSpelling
+
+/- `bv_unsigned w` is `w`'s value as an integer, from the one shared
+   declaration in `LinuxSem.Common.RocqSpelling` (imported and opened
+   here), so the statements below read in one vocabulary. -/
 
 def page_numbers (pages : List word) : List Int :=
   pages.map bv_unsigned

@@ -61,6 +61,7 @@ import LinuxSem.Common.CatExec
 import LinuxSem.Common.SeqExec
 import LinuxSem.Common.PropExec
 import LinuxSem.Checks.Sys.Fs.ReadWrite
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 set_option maxHeartbeats 1000000
@@ -70,6 +71,7 @@ set_option linter.unusedSimpArgs false
 set_option linter.unusedSectionVars false
 
 namespace LinuxSem.Common.DrainSim
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem

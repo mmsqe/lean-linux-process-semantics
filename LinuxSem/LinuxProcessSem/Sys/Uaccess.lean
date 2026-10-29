@@ -21,6 +21,7 @@
 -/
 import LinuxSem.LinuxProcessSem.StateMemory
 import LinuxSem.LinuxProcessSem.MonadInstances
+import LinuxSem.LinuxProcessSem.Sys.Syscall
 
 open LinuxSem.Riscv
 
@@ -34,8 +35,11 @@ namespace LinuxSem.LinuxProcessSem.Sys.Uaccess
       Definition err_ret (e : Z) : Sys SyscallEffect := ret_only (errno_ret e).
 -/
 
-/-- Return `r` with no memory writes. -/
-def ret_only (r : word) : SysSpec SyscallEffect := pure (mkEffect r [] [])
+/-- Return `r` with no memory writes.  This is the `Sys.Syscall.ret_only`
+    of the shared calling convention, as a transparent alias: the body is
+    the same `pure (mkEffect r [] [])`. -/
+abbrev ret_only (r : word) : SysSpec SyscallEffect :=
+  LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only r
 
 /-- Fail with errno `e` (a0 = -e). -/
 def err_ret (e : Int) : SysSpec SyscallEffect := ret_only (errno_ret e)
@@ -512,15 +516,8 @@ theorem rw_count_clamp_of_rw (count : word)
 def write_source (mp : word → Option byte) (buf count : word) : List byte :=
   readable_bytes mp buf (BitVec.ofInt 64 (rw_count_clamp count))
 
-/-- `BitVec.ofInt 64` round-trips a `word`'s unsigned value —
-    `Z_to_bv_bv_unsigned`, which `write_source_small` rewrites with. -/
-private theorem ofInt_toNat (w : word) : BitVec.ofInt 64 (w.toNat : Int) = w := by
-  refine BitVec.eq_of_toNat_eq ?_
-  rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt]
-  · simp
-  · exact Int.natCast_nonneg _
-  · have := w.isLt
-    omega
+-- `BitVec.ofInt 64` round-trips a `word`'s unsigned value: the canonical
+-- `BvBase.ofInt_toNat`, which `write_source_small` rewrites with.
 
 theorem write_source_length_le (mp : word → Option byte) (buf count : word) :
     ((write_source mp buf count).length : Int) ≤ rw_count_clamp count := by

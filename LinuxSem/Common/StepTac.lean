@@ -700,14 +700,10 @@ macro "stepld " F:term "," D:term "," aexp:term "," vexp:term "," readtac:term :
     unchanged. -/
 macro "vm_refl_bv" : tactic => `(tactic| first | rfl | decide)
 
-/-- A word is the `BitVec.ofInt` literal of its own unsigned value (the
-    `BitVec.ofNat`/`ofInt` bridge the literal normalizers need).
- Kept as an explicit lemma so [wlit_closed] has a rewrite
-    rule to cite. -/
-theorem ofInt_toNat (x : word) : BitVec.ofInt 64 (x.toNat : Int) = x := by
-  have hx := x.isLt
-  apply BitVec.eq_of_toNat_eq
-  exact Int.ofNat_inj.mp (u_Z2bv (x.toNat : Int) (by omega) (by omega))
+/- A word is the `BitVec.ofInt` literal of its own unsigned value (the
+   `BitVec.ofNat`/`ofInt` bridge the literal normalizers need) — the
+   canonical `BvBase.ofInt_toNat`, imported and opened
+   here; the rewrite rule [wlit_closed] cites is that one. -/
 
 /-- Replace a CLOSED word-valued redex [p] (e.g. the fault address
     `v_addi (BitVec.ofInt 64 0) imm`) with its computed `BitVec.ofInt 64 z`
@@ -1378,5 +1374,20 @@ example (Htail : to_wexit segs
   · exact Htail
 
 end DispatchSmoke
+
+
+/-- Z_to_bv 64 absorbs multiples of 2^64 (for "negative literal" immediates). -/
+theorem Z_to_bv_mod64 (z : Int) :
+    BitVec.ofInt 64 z = BitVec.ofInt 64 (z % ((2 ^ 64 : Nat) : Int)) := by
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_ofInt, BitVec.toNat_ofInt]
+  exact congrArg Int.toNat (Int.emod_emod z _).symm
+
+
+/-- `BitVec.ofInt` at a value already in range: the `Int` `toNat` is the
+    value itself. -/
+theorem toNat_ofInt_of_range (z : Int) (h0 : 0 ≤ z) (h1 : z < 2 ^ 64) :
+    (BitVec.ofInt 64 z).toNat = z.toNat := by
+  rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt h0 (by rw [Int.natCast_pow]; exact h1)]
 
 end LinuxSem.Common.StepTac

@@ -47,13 +47,14 @@
   Bool.false_eq_true, ite_false, ite_true]` on `socket_spec` with
   `bind_getModel` applied at the head.
 
-  `arm_ok`, `arm_check_ok`, `ret_only_ok_inv`, `choose_ok_inv`,
-  `ret_only_ne_unmodeled`, `lowest_fd_arm`, `lowest_fd_arm_inv` and
-  `lowest_fd_arm_ne_unmodeled` are `private` in the parent file, so a
-  sibling module cannot cite them; they are restated here verbatim
-  (`socket_lowest_fd_*`) or in the form this file needs.  When the parent's
-  are made public, the copies below can go — their statements are
-  unchanged.
+  `ret_only_ok_inv`, `choose_ok_inv`, `ret_only_ne_unmodeled`,
+  `lowest_fd_arm`, `lowest_fd_arm_inv` and `lowest_fd_arm_ne_unmodeled`
+  are `private` in the parent file, so a sibling module cannot cite them;
+  they are restated here verbatim (`socket_lowest_fd_*`) or in the form
+  this file needs.  When the parent's are made public, the copies below can
+  go — their statements are unchanged.  `arm_ok` / `arm_check_ok` are no
+  longer restated: `LinuxSem.Checks.Sys.Prelude` states them publicly, and
+  the `open` below is what reaches them.
 -/
 import LinuxSem.Checks.Sys.Net.Socket
 
@@ -65,159 +66,27 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
   (rw_bytes_max modeled_rw_count access_ok_zero)
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff lowest_fd)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite (UIO_FASTIOV)
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket
 open LinuxSem.Checks.Sys.Prelude
 open LinuxSem.Checks.Sys.Uaccess (check_access_ok_zero)
 
-/-- The syscall layer's 32-bit argument truncation.  `Sys.Uapi` carries a
-    staging copy of the same function, so the bare name is ambiguous once
-    both namespaces are open; the checkers must use the one the specs use,
-    so this binds it to `Syscall`'s (the same binding the parent file
-    makes). -/
-private abbrev abi_low32 (w : word) : word :=
-  LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32 w
+/- The syscall layer's 32-bit argument truncation.  `Sys.Uapi` carries a
+   staging alias of the same function, so the bare name is ambiguous once
+   both namespaces are open; the checkers must use the one the specs use, so
+   the `local notation` below binds it to `Syscall`'s (the same binding the
+   parent file makes).  It declares nothing — unlike the `private abbrev` it
+   replaces — and expands to the canonical name. -/
+local notation "abi_low32" => LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32
 
 /- =========================================================================
    The restated leaves (the parent file's `private` helpers)
    ========================================================================= -/
 
-/-- Checker -> spec for one arm that answers through `check_ret_only`: an
-    accepted `check_ret_only` *is* the spec's `ret_only` at that word,
-    with the claimed model and events. -/
-private theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨heff, hm, hevs⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rw [heff, hm, hevs]
-  exact pure_ok _ i m
-
-/-- An accepted `ret_only` outcome, read back: the effect is the bare word,
-    the model is untouched, and no event was emitted. -/
-private theorem ret_only_ok_inv (r : word) (i : SyscallInput) (m : Model)
-    (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    eff = mkEffect r [] [] ∧ m' = m ∧ evs = [] := by
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  simp only [Outcome.ok.injEq] at H
-  exact ⟨H.1, H.2.1, H.2.2⟩
-
-/-- Spec -> checker for one arm: an outcome of the spec's `ret_only` at
-    that word is accepted by `check_ret_only` at the same word. -/
-private theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨heff, hm, hevs⟩ := ret_only_ok_inv r i m eff m' evs H
-  rw [heff, hm, hevs]
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- An accepted `errno_from` outcome: the errno is a member of the set and
-    neither the model nor the ledger moved. -/
-private theorem choose_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
-    (e : Int) (m1 : Model) (evs1 : List event)
-    (H : errno_from es i m (.ok e m1 evs1)) :
-    e ∈ es ∧ m1 = m ∧ evs1 = [] := by
-  unfold errno_from choose at H
-  obtain ⟨x, hx, hok⟩ := H
-  simp only [Outcome.ok.injEq] at hok
-  obtain ⟨rfl, rfl, rfl⟩ := hok
-  exact ⟨hx, rfl, rfl⟩
-
-/-- `ret_only` — hence `err_ret` — never declines: `pure` has one outcome
-    shape. -/
-private theorem ret_only_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  exact nomatch H
-
-/-- The success arm, introduction form: the lowest free descriptor, with
-    the model `mk` builds from it.  The parent file's `lowest_fd_arm`. -/
-private theorem socket_lowest_fd_arm (fds : List (word × FdEntry))
-    (mk : word → Model → Model) (i : SyscallInput) (m : Model)
-    (hfr : fd_lookup fds (alloc_fd fds) = none) :
-    bind (lowest_fd fds)
-      (fun fd => seqSpec (modifySpec (mk fd)) (ret_only fd))
-      i m (.ok (mkEffect (alloc_fd fds) [] []) (mk (alloc_fd fds) m) []) := by
-  refine bind_ok0 _ _ i m (alloc_fd fds) m
-    (mkEffect (alloc_fd fds) [] []) (mk (alloc_fd fds) m) [] ?_ ?_
-  · exact choose_ok
-      (fun fd => fd_lookup fds fd = none ∧ fd = alloc_fd fds)
-      _ i m ⟨hfr, rfl⟩
-  · refine bind_ok (modifySpec (mk (alloc_fd fds)))
-      (fun _ => ret_only (alloc_fd fds)) i m ()
-      (mk (alloc_fd fds) m) [] (mkEffect (alloc_fd fds) [] [])
-      (mk (alloc_fd fds) m) [] ?_ ?_
-    · exact modify_ok _ i m
-    · exact pure_ok _ i _
-
-/-- The success arm, elimination form: an outcome of `lowest_fd` read back
-    as the fd `alloc_fd` picks and the model `mk` builds there.  The parent
-    file's `lowest_fd_arm_inv`. -/
-private theorem socket_lowest_fd_inv (fds : List (word × FdEntry))
-    (mk : word → Model → Model)
-    (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model)
-    (evs : List event)
-    (H : bind (lowest_fd fds)
-        (fun nfd => seqSpec (modifySpec (mk nfd)) (ret_only nfd))
-        i m (.ok eff m' evs)) :
-    fd_lookup fds (alloc_fd fds) = none ∧ eff = mkEffect (alloc_fd fds) [] [] ∧
-      m' = mk (alloc_fd fds) m ∧ evs = [] := by
-  unfold LinuxSem.LinuxProcessSem.bind at H
-  obtain ⟨nfd, m1, evs1, evs2, Hch, Hk, heq⟩ := H
-  obtain ⟨x, hpred, hok⟩ := Hch
-  obtain ⟨hlookup, hnfd⟩ := hpred
-  cases hok
-  simp only [List.nil_append] at heq
-  unfold seqSpec LinuxSem.LinuxProcessSem.bind at Hk
-  obtain ⟨u, m2, ev1, ev2, hc, hk, heq2⟩ := Hk
-  unfold modifySpec LinuxSem.LinuxProcessSem.modify at hc
-  simp only [Outcome.ok.injEq] at hc
-  obtain ⟨-, hm2, hev1⟩ := hc
-  rw [hm2] at hk
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at hk
-  simp only [Outcome.ok.injEq] at hk
-  obtain ⟨heff0, hm'0, hevs2⟩ := hk
-  rw [hev1, List.nil_append, hevs2] at heq2
-  rw [heq2] at heq
-  subst hnfd
-  exact ⟨hlookup, heff0, hm'0, heq⟩
-
-/-- The success arm never declines.  The parent file's
-    `lowest_fd_arm_ne_unmodeled`. -/
-private theorem socket_lowest_fd_ne_unmodeled (fds : List (word × FdEntry))
-    (mk : word → Model → Model) (i : SyscallInput) (m : Model) :
-    ¬ bind (lowest_fd fds)
-        (fun nfd => seqSpec (modifySpec (mk nfd)) (ret_only nfd)) i m .unmodeled := by
-  intro H
-  unfold LinuxSem.LinuxProcessSem.bind at H
-  rcases H with Hc | ⟨x, m1, evs1, Hc, Hk⟩
-  · unfold lowest_fd choose at Hc
-    obtain ⟨y, hy, hok⟩ := Hc
-    simp at hok
-  · unfold seqSpec LinuxSem.LinuxProcessSem.bind at Hk
-    rcases Hk with Hc2 | ⟨u, m2, ev1, Hc2, Hk2⟩
-    · unfold modifySpec LinuxSem.LinuxProcessSem.modify at Hc2
-      simp at Hc2
-    · unfold ret_only LinuxSem.LinuxProcessSem.pure at Hk2
-      simp at Hk2
-
-/-- The injected-errno half of the success arm never declines.  The parent
-    file's `errno_arm_ne_unmodeled`. -/
-private theorem errno_arm_ne_unmodeled (es : List Int) (i : SyscallInput)
-    (m : Model) :
-    ¬ bind (errno_from es) (fun e => err_ret e) i m .unmodeled := by
-  intro H
-  unfold LinuxSem.LinuxProcessSem.bind at H
-  rcases H with Hc | ⟨e, m1, evs1, Hc, Hret⟩
-  · unfold errno_from choose at Hc
-    obtain ⟨x, hx, hok⟩ := Hc
-    simp at hok
-  · unfold err_ret ret_only LinuxSem.LinuxProcessSem.pure at Hret
-    exact nomatch Hret
+/- The one-arm checker ↔ spec bridge (`arm_ok` for checker → spec,
+   `arm_check_ok` for spec → checker) is stated publicly in
+   `LinuxSem.Checks.Sys.Prelude`, opened above. -/
 
 /- =========================================================================
    One arm of `socket_spec` per lemma
@@ -501,7 +370,7 @@ private theorem socket_arm_stream_sound_ok (domain type protocol : word)
           simp only [heq, ite_true, check_result.CheckOk.injEq] at H
           obtain ⟨rfl, rfl⟩ := H
           rw [hret] at hf ⊢
-          exact alt_r _ _ _ _ _ (socket_lowest_fd_arm (m_fds m)
+          exact alt_r _ _ _ _ _ (lowest_fd_arm (m_fds m)
             (fun nfd mm => with_fds (fd_insert (m_fds m) nfd (.FdSocket .SkFresh)) mm)
             i m hf)
       · simp only [hf] at H
@@ -540,7 +409,7 @@ private theorem socket_arm_stream_complete_ok (domain type protocol : word)
     rw [heff, hm', heq]
     simp [check_new_fd_result, errno_ret_in_intro socket_errnos er hmem]
   · obtain ⟨hlookup, heff, hm', hevs⟩ :=
-      socket_lowest_fd_inv (m_fds m) _ i m eff m' evs Hs
+      lowest_fd_arm_inv (m_fds m) _ i m eff m' evs Hs
     rw [heff, hm', hevs]
     simp [check_new_fd_result, hlookup,
       errno_ret_in_alloc_fd socket_errnos (m_fds m) (by decide), bv_eqb_refl]
@@ -568,7 +437,7 @@ private theorem socket_arm_stream_ne_unmodeled (domain type protocol : word)
   simp only [h1, h2, h3, h4, h5, h6, h7, h8, h9, h10, Bool.false_eq_true, ite_false, ite_true] at H1
   rcases H1 with He | Hs
   · exact absurd He (errno_arm_ne_unmodeled socket_errnos i m)
-  · exact absurd Hs (socket_lowest_fd_ne_unmodeled (m_fds m) _ i m)
+  · exact absurd Hs (lowest_fd_arm_ne_unmodeled (m_fds m) _ i m)
 
 /- =========================================================================
    The four agreement lemmas (pure dispatchers)
@@ -844,3 +713,10 @@ theorem check_socket_complete_unmodeled (domain type protocol : word)
       (ret_only_ne_unmodeled (errno_ret EINVAL) i m)
 
 end LinuxSem.Checks.Sys.Net.Socket
+
+
+
+
+
+
+

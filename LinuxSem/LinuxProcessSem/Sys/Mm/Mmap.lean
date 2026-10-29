@@ -2305,7 +2305,7 @@ def munmap_spec (addr len : word) : SysSpec SyscallEffect :=
 private def brkVm : VmMaps :=
   mkVmMaps [] [] (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x14000) 0x100000
 private def brkModel : Model :=
-  mkModel [] brkVm IEof [] none none none
+  mkModel [] brkVm IEof []
 
 /-- A syscall input for `brk` (214).  None of the three specs reads it —
     the arguments arrive as the specs' own parameters — so one input serves
@@ -2419,7 +2419,7 @@ example :
     brk_grow_ok
       (mkModel [] (mkVmMaps [] [(BitVec.ofInt 64 0x12000, BitVec.ofInt 64 0x1000)]
         (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x10000) 0x100000)
-        IEof [] none none none)
+        IEof [])
       (BitVec.ofInt 64 0x12000) (BitVec.ofInt 64 0x12000) = false := by decide
 
 /-- …and one page lower grants: the same request against a neighbour at
@@ -2428,7 +2428,7 @@ example :
     brk_grow_ok
       (mkModel [] (mkVmMaps [] [(BitVec.ofInt 64 0x14000, BitVec.ofInt 64 0x1000)]
         (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x10000) 0x100000)
-        IEof [] none none none)
+        IEof [])
       (BitVec.ofInt 64 0x12000) (BitVec.ofInt 64 0x12000) = true := by decide
 
 /-- THE BUDGET: a grow whose byte delta does not fit is not ok, and the
@@ -2437,12 +2437,12 @@ example :
 example :
     brk_budget_ok
       (mkModel [] (mkVmMaps [] [] (BitVec.ofInt 64 0x10000)
-        (BitVec.ofInt 64 0x10000) 0x1000) IEof [] none none none)
+        (BitVec.ofInt 64 0x10000) 0x1000) IEof [])
       (BitVec.ofInt 64 0x12000) = false := by decide
 example :
     brk_budget_refused_b
       (mkModel [] (mkVmMaps [] [] (BitVec.ofInt 64 0x10000)
-        (BitVec.ofInt 64 0x10000) 0x1000) IEof [] none none none)
+        (BitVec.ofInt 64 0x10000) 0x1000) IEof [])
       (BitVec.ofInt 64 0x12000) = true := by decide
 example :
     brk_budget_refused_b brkModel (BitVec.ofInt 64 0x16000) = false := by decide
@@ -2464,7 +2464,7 @@ example :
 private def heapVm : VmMaps :=
   mkVmMaps [] [(BitVec.ofInt 64 0x10000, BitVec.ofInt 64 0x3000)]
     (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x10000) 0x100000
-private def heapModel : Model := mkModel [] heapVm IEof [] none none none
+private def heapModel : Model := mkModel [] heapVm IEof []
 
 /-- The free-range gate: a range the ledger does not own, below the stack
     band, is free… -/
@@ -2531,7 +2531,7 @@ example : mmap_pglen_ok_b (BitVec.ofInt 64 0xFFFFFFFFFFFFFFFF) = false := by dec
     the model every budget-refusal check runs over. -/
 private def spentVm : VmMaps :=
   mkVmMaps [] [] (BitVec.ofInt 64 0) (BitVec.ofInt 64 0) 0
-private def spentModel : Model := mkModel [] spentVm IEof [] none none none
+private def spentModel : Model := mkModel [] spentVm IEof []
 
 /-- THE BUDGET GATE: a MAP_NORESERVE grant is free at grant time, an
     ordinary one is charged against `vm_limit`, and a spent budget refuses
@@ -2566,7 +2566,7 @@ example :
 /-- An empty ledger with a live budget: the model the placement and
     grant checks run over. -/
 private def emptyVm : VmMaps := mkVmMaps [] [] 0 0 0x100000
-private def emptyModel : Model := mkModel [] emptyVm IEof [] none none none
+private def emptyModel : Model := mkModel [] emptyVm IEof []
 
 /-- A SPENT BUDGET MAKES THE GUARD UNSATISFIABLE, which is what turns the
     [alt] into a forced -ENOMEM: no address satisfies the placed-grant

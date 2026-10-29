@@ -55,6 +55,7 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Kernel.Time.Hrtimer
 open LinuxSem.Checks.Sys.Prelude
+open LinuxSem.LinuxProcessSem.Specs
 
 /-- nanosleep: an unreadable request declines; an invalid one is
     -EINVAL; and otherwise BOTH outcomes are admissible, so the
@@ -211,17 +212,6 @@ private theorem eff_nils_ne_unmodeled {f : word → check_result}
   · rename_i r' ks' heq
     exact hf _ hh
   · exact nomatch hh
-
-/-- An `if` whose test `cases` has already rewritten to the literal `true`
-    — `if true = true then a else b` — is its THEN arm. -/
-private theorem ite_true_cond {α : Sort _} (a b : α) :
-    (if (true = true) then a else b) = a := by
-  rw [ite_eq_left rfl]
-
-/-- …and one whose test has become `false = true` is its ELSE arm. -/
-private theorem ite_false_cond {α : Sort _} (a b : α) :
-    (if (false = true) then a else b) = b := by
-  rw [ite_eq_right (show ¬(false = true) by decide)]
 
 /-- `ret_only` answers its argument, with the model and events untouched. -/
 private theorem ret_only_ok_inv {r : word} {i : SyscallInput} {m : Model}
@@ -405,40 +395,6 @@ private theorem check_copyins_ok_iff (reads : List (word × Nat)) (eff : Syscall
     · rintro ⟨heff, -⟩
       rw [heff] at h
       exact absurd (access_ranges_eqb_refl reads) h
-
-/-- [bind] over the environment's [choose]: an accepted outcome names the
-    chosen value and its evidence. -/
-private theorem choose_bind_ok_inv {A B : Type} (P : A → Prop) (k : A → SysSpec B)
-    (i : SyscallInput) (m : Model) (y : B) (m' : Model) (evs : List event)
-    (H : bind (choose P) k i m (.ok y m' evs)) :
-    ∃ x, P x ∧ k x i m (.ok y m' evs) := by
-  unfold LinuxSem.LinuxProcessSem.bind
-    LinuxSem.LinuxProcessSem.choose at H
-  obtain ⟨x, m1, evs1, evs2, hc, hk, hevs⟩ := H
-  obtain ⟨x0, hP, hok⟩ := hc
-  simp only [Outcome.ok.injEq] at hok
-  obtain ⟨hx, hm1, hevs1⟩ := hok
-  subst hx; subst hm1; subst hevs1
-  simp only [List.nil_append] at hevs
-  subst hevs
-  exact ⟨_, hP, hk⟩
-
-/-- The same inversion in the [Unmodeled] shape: [choose] itself never
-    declines, so the decline is the continuation's. -/
-private theorem choose_bind_unmodeled_inv {A B : Type} (P : A → Prop)
-    (k : A → SysSpec B) (i : SyscallInput) (m : Model)
-    (H : bind (choose P) k i m .unmodeled) :
-    ∃ x, P x ∧ k x i m .unmodeled := by
-  unfold LinuxSem.LinuxProcessSem.bind
-    LinuxSem.LinuxProcessSem.choose at H
-  rcases H with h | ⟨x, m1, evs1, hc, hk⟩
-  · obtain ⟨x, hP, hok⟩ := h
-    exact nomatch hok
-  · obtain ⟨x0, hP, hok⟩ := hc
-    simp only [Outcome.ok.injEq] at hok
-    obtain ⟨hx, hm1, hevs1⟩ := hok
-    subst hx; subst hm1; subst hevs1
-    exact ⟨_, hP, hk⟩
 
 /-! ## The checker ≡ the spec -/
 
@@ -773,3 +729,8 @@ theorem check_nanosleep_complete_unmodeled (i : SyscallInput) (rqtp rmtp : word)
       exact nomatch himp
 
 end LinuxSem.Checks.Sys.Kernel.Time.Hrtimer
+
+
+
+
+

@@ -212,6 +212,7 @@
 -/
 import LinuxSem.Common.CatSim
 import LinuxSem.Common.PropExec
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
@@ -225,6 +226,7 @@ open LinuxSem.LinuxProcessSem.MemImageType
 open LinuxSem.LinuxProcessSem.Specs
 open LinuxSem.Common.CatSim
 open LinuxSem.Common.PropExec
+open LinuxSem.Common.SharedFacts
 
 /-- `Local Instance asanreflect_fx : PropExec.FPState :=
     PropExec.fx0`: the FP state at process entry, so that [mkst] can be
@@ -1424,47 +1426,6 @@ theorem accesses_pages_nodup (accs : List (word × Nat)) (pages : List word)
     show (accesses_pages accs (access_pages_acc (aw.toNat : Int) n pages)).Nodup
     exact ih _ (access_pages_acc_nodup _ _ _ h)
 
-theorem page_insert_in (p q : word) (pages : List word)
-    (h : p ∈ page_insert q pages) : p = q ∨ p ∈ pages := by
-  unfold page_insert at h
-  split at h
-  · exact Or.inr h
-  · rcases List.mem_cons.mp h with h' | h'
-    · exact Or.inl h'
-    · exact Or.inr h'
-
-theorem access_pages_acc_in (base : Int) (n : Nat) (pages : List word) (p : word)
-    (h : p ∈ access_pages_acc base n pages) :
-    p ∈ pages ∨ ∃ k, k < n ∧ p = page_base_of (base + (k : Int)) := by
-  induction n generalizing base pages with
-  | zero => exact Or.inl (by simpa [access_pages_acc] using h)
-  | succ k ih =>
-    simp only [access_pages_acc] at h
-    rcases ih (base + 1) _ h with hin | ⟨j, hj, hp⟩
-    · rcases page_insert_in _ _ _ hin with heq | hin
-      · subst heq
-        exact Or.inr ⟨0, by omega, by simp⟩
-      · exact Or.inl hin
-    · refine Or.inr ⟨j + 1, by omega, ?_⟩
-      rw [hp]
-      congr 1
-      omega
-
-theorem accesses_pages_in (accs : List (word × Nat)) (pages : List word) (p : word)
-    (h : p ∈ accesses_pages accs pages) :
-    p ∈ pages ∨ ∃ a n k, (a, n) ∈ accs ∧ k < n
-      ∧ p = page_base_of ((a.toNat : Int) + (k : Int)) := by
-  induction accs generalizing pages with
-  | nil => exact Or.inl (by simpa [accesses_pages] using h)
-  | cons x accs ih =>
-    obtain ⟨aw, n⟩ := x
-    simp only [accesses_pages] at h
-    rcases ih _ h with hin | ⟨a', n', k, hin', hk, hp⟩
-    · rcases access_pages_acc_in (aw.toNat : Int) n pages p hin with hp' | ⟨k, hk, hp'⟩
-      · exact Or.inl hp'
-      · exact Or.inr ⟨aw, n, k, List.mem_cons_self, hk, hp'⟩
-    · exact Or.inr ⟨a', n', k, List.mem_cons_of_mem _ hin', hk, hp⟩
-
 theorem nodup_filter (p : word → Bool) (l : List word) (h : l.Nodup) :
     (l.filter p).Nodup := by
   induction l with
@@ -1815,12 +1776,6 @@ theorem rz_msteps_restricted' (segs : List Segment) (H : word → Bool)
 /- ** Part 5.  Generic lazy-tolerant SYSCALL node                        -/
 /- ===================================================================== -/
 
-/-- Materializing an empty access list is the identity on ANY model. -/
-theorem materialize_model_accesses_nil (m : Model) :
-    materialize_model_accesses m [] = some m := by
-  unfold materialize_model_accesses materialize_accesses newly_materialized_pages
-  simp [accesses_pages, with_vm_backing_id]
-
 /-- The computable successor model after materializing [accs]. -/
 def materialized_succ (m : Model) (accs : List (word × Nat)) : Model :=
   match materialize_model_accesses m accs with
@@ -2114,3 +2069,11 @@ example : page_allowedb [(0, 8192)] (BitVec.ofInt 64 8192) = false := by decide
 /- the other `MInv` lemmas because they belong with them.  Statements   -/
 /- are , unchanged.                                           -/
 /- ===================================================================== -/
+
+
+
+
+
+
+
+

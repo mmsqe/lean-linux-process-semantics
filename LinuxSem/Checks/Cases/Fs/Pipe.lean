@@ -57,6 +57,7 @@ import LinuxSem.LinuxProcessSem.Sys.Fs.Namei
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Fork
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
 import LinuxSem.LinuxProcessSem.Sys.Syscall
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -84,49 +85,9 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Fs.Pipe
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed`: the signed value of a bitvector, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
-
-/-- `in_mem` as a function (a `SyscallInput` field projection). -/
-abbrev in_mem (i : SyscallInput) : word → Option byte := i.in_mem
-/-- `in_wmem` as a function. -/
-abbrev in_wmem (i : SyscallInput) : word → Option byte := i.in_wmem
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
-/-- `eff_writes` as a function. -/
-abbrev eff_writes (e : SyscallEffect) : List (word × List byte) := e.eff_writes
-/-- `eff_zeros` as a function. -/
-abbrev eff_zeros (e : SyscallEffect) : List (word × word) := e.eff_zeros
-/-- `eff_unmaps` as a function. -/
-abbrev eff_unmaps (e : SyscallEffect) : List (word × word) := e.eff_unmaps
-/-- `eff_copies` as a function. -/
-abbrev eff_copies (e : SyscallEffect) : List MemCopy := e.eff_copies
-/-- `eff_copyins` as a function. -/
-abbrev eff_copyins (e : SyscallEffect) : List (word × Nat) := e.eff_copyins
+/-! The Rocq spellings used below (`bv_unsigned`, `Z_to_bv`, …) are the shared transparent aliases of `LinuxSem.Common.RocqSpelling`. -/
 
 /-! * LinuxProcessSem.Checks.Cases.Fs.Pipe — worked examples over pipe2 (59) and a pipe-end fd
 
@@ -177,7 +138,7 @@ def pipe_model : Model :=
       (3, FdEntry.FdPipe 0 false), (4, FdEntry.FdPipe 0 true),
       (5, FdEntry.FdFileW [102] 0) ]
     (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120])] none none none
+    [([102], [120])]
 
 /-! WHY THE DECLINES BELOW CARRY A CONTRAST.  A pin reading
     [CheckUnmodeled] says much less than it looks like it says: it also
@@ -541,7 +502,7 @@ def clone_model : Model :=
   mkModel
     [ (0, FdEntry.FdChannel 0), (1, FdEntry.FdChannel 1), (2, FdEntry.FdChannel 2),
       (3, FdEntry.FdPipe 0 false) ]
-    (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none
+    (mkVmMaps [] [] 0 0 demo_limit) IEof []
 
 theorem clone_with_a_pipe_end_open_declines :
   /- the syscall declines, over a table whose ONLY non-channel entry is

@@ -51,6 +51,7 @@ import LinuxSem.Checks.Sys.Fs.Select
 import LinuxSem.LinuxProcessSem.Sys.Fs.Select
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
 import LinuxSem.LinuxProcessSem.Sys.Syscall
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 2000000
@@ -73,49 +74,9 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Fs.Select
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed`: the signed value of a bitvector, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
-
-/-- `in_mem` as a function (a `SyscallInput` field projection). -/
-abbrev in_mem (i : SyscallInput) : word → Option byte := i.in_mem
-/-- `in_wmem` as a function. -/
-abbrev in_wmem (i : SyscallInput) : word → Option byte := i.in_wmem
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
-/-- `eff_writes` as a function. -/
-abbrev eff_writes (e : SyscallEffect) : List (word × List byte) := e.eff_writes
-/-- `eff_zeros` as a function. -/
-abbrev eff_zeros (e : SyscallEffect) : List (word × word) := e.eff_zeros
-/-- `eff_unmaps` as a function. -/
-abbrev eff_unmaps (e : SyscallEffect) : List (word × word) := e.eff_unmaps
-/-- `eff_copies` as a function. -/
-abbrev eff_copies (e : SyscallEffect) : List MemCopy := e.eff_copies
-/-- `eff_copyins` as a function. -/
-abbrev eff_copyins (e : SyscallEffect) : List (word × Nat) := e.eff_copyins
+/-! The Rocq spellings used below (`bv_unsigned`, `Z_to_bv`, …) are the shared transparent aliases of `LinuxSem.Common.RocqSpelling`. -/
 
 /-- `word_le4`: the four little-endian bytes of a word's low half — an
     `int` as the kernel's `put_user` stores it.  `BvBase` carries
@@ -173,7 +134,7 @@ def ps_wmem : word → Option byte :=
     represent. -/
 def pselect_model : Model :=
   mkModel [(0, FdEntry.FdChannel 0), (3, FdEntry.FdFile [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [104, 105])] none none none
+    [([102], [104, 105])]
 
 /-! The return value is a BIT count, not a descriptor count: [do_select]
     has three independent [retval++], one per result mask, so fd 3 named
@@ -655,7 +616,7 @@ theorem ppoll_counts_descriptors_not_bits :
     given. -/
 def pselect_model_rdwr : Model :=
   mkModel [(0, FdEntry.FdChannel 0), (3, FdEntry.FdFileRW [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [104, 105])] none none none
+    [([102], [104, 105])]
 
 theorem ppoll_a_read_write_file_polls_as_any_other :
   check_syscall

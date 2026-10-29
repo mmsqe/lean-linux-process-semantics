@@ -102,6 +102,18 @@ def halt_ev (m' : Model) (code : word) : event :=
   | some sig => .KillEv sig (m_fs m')
   | none => .ExitEv code (m_fs m')
 
+/-- The forward direction every node uses: an admissible, non-halting
+    checker answer into a model without lazy mappings is an `sstep`. -/
+theorem sstep_of_check (segs : List Segment) (ms : machine_state) (model : Model)
+    (x8 : word) (eff : SyscallEffect) (m' : Model) (evs : List event)
+    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = some x8)
+    (Hc : check_syscall (sys_input segs ms x8) eff model = .CheckOk m' evs)
+    (Hh' : m_halted m' = none) (Hlazy : m_vm_lazy m' = []) :
+    sstep segs (mkCfg ms model) evs
+      (.SNext (mkCfg (advance_past_svc (apply_effect ms eff)) m')) := by
+  refine .syscall ms model x8 eff m' m' evs Hh Hsvc ((check_syscall_ok_iff _ _ _ _ _).mp Hc) Hh' ?_
+  rw [materialize_model_accesses_no_lazy m' (syscall_effect_accesses eff) Hlazy]
+
 /-- Inversion of one transition at a pending syscall, phrased through the
     checker.  Three `CheckOk` sub-cases: the ordinary step (into the
     MATERIALIZED post-model), the materialization fault, the exit. -/
@@ -157,18 +169,6 @@ theorem sstep_svc_inv (segs : List Segment) (ms : machine_state) (model : Model)
       obtain rfl := Option.some.inj p5
       exact Or.inr ⟨mkEffect (BitVec.ofInt 64 0) [] [], (check_syscall_err_iff _ _ _).mpr hspec,
         rfl, rfl⟩
-
-/-- The forward direction every node uses: an admissible, non-halting
-    checker answer into a model without lazy mappings is an `sstep`. -/
-theorem sstep_of_check (segs : List Segment) (ms : machine_state) (model : Model)
-    (x8 : word) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = some x8)
-    (Hc : check_syscall (sys_input segs ms x8) eff model = .CheckOk m' evs)
-    (Hh' : m_halted m' = none) (Hlazy : m_vm_lazy m' = []) :
-    sstep segs (mkCfg ms model) evs
-      (.SNext (mkCfg (advance_past_svc (apply_effect ms eff)) m')) := by
-  refine .syscall ms model x8 eff m' m' evs Hh Hsvc ((check_syscall_ok_iff _ _ _ _ _).mp Hc) Hh' ?_
-  rw [materialize_model_accesses_no_lazy m' (syscall_effect_accesses eff) Hlazy]
 
 /-- An [I]-indexed silent-or-not node described through the checker: its
     `CheckOk` answers at this pending state are exactly the family
@@ -515,3 +515,4 @@ example (m : Model) (code sig : word) (Hk : m_killed m = some sig) :
 example (m : Model) : Nonempty (open_I m) := ⟨.inr ()⟩
 
 end LinuxSem.Common.Nodes
+

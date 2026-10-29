@@ -135,7 +135,7 @@ private def demoFds : List (word × FdEntry) :=
 /-- The model the checks run in: the fd table above, an empty VM ledger,
     an empty file system, EOF on stdin, no halt and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- LOCK_MAND is 0 without reading the fd — even a closed one. -/
 example : flock_witness 9 32 demoModel

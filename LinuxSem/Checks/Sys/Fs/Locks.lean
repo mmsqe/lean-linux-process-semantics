@@ -34,7 +34,7 @@
   which is why each proof first `generalize`s its conclusion into a local
   `Q : Prop` and rewrites `Q` back at the leaves with `rw [← hP]`, as in
   `Checks/Sys/Kernel/Groups.lean`.  (The flock tests themselves get stuck on
-  `cmd.toNat` rather than diverging as `sint32` does, so the device is only
+  `cmd.toNat` where a literal `sint32` now reduces, so the device is only
   needed for the uniformity of the four scripts.)
 -/
 import LinuxSem.Checks.Sys.Prelude
@@ -109,14 +109,6 @@ def check_flock (fd cmd : word) (eff : SyscallEffect) (m : Model)
     cmd-only tests are `simp only [ite_eq_left/ite_eq_right …] at H`, and `hfd` is a
     `simp` argument in the goal because the spec's own `match` has to be
     rewritten there. -/
-
-/-- A bare return is never the decline: `ret_only` delivers `.ok`.
-    Stated once here rather than inverting the same `pure` inline. -/
-theorem ret_only_unmodeled_false (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  simp only [ret_only, LinuxSem.LinuxProcessSem.pure] at H
-  exact nomatch H
 
 theorem check_flock_sound_ok (fd cmd : word) (eff : SyscallEffect) (m m' : Model)
     (evs : List event) (i : SyscallInput)
@@ -309,12 +301,12 @@ theorem check_flock_complete_unmodeled (fd cmd : word) (m : Model)
           (simp only [hfd] at H
            by_cases hun : flock_unlock_b cmd = true
            · simp only [ite_eq_left hun] at H
-             exact absurd H (ret_only_unmodeled_false _ i m)
+             exact absurd H (ret_only_ne_unmodeled _ i m)
            · simp only [ite_eq_right hun] at H
              first
              | (by_cases hsole : flock_sole_opener (m_fds m) p = true
                 · simp only [ite_eq_left hsole] at H
-                  exact absurd H (ret_only_unmodeled_false _ i m)
+                  exact absurd H (ret_only_ne_unmodeled _ i m)
                 · simp only [ite_eq_right hsole] at H
                   rw [← hP]
                   simp only [check_flock, ite_eq_right hmand, ite_eq_right hok, hfd,
@@ -359,7 +351,7 @@ private def demoFds : List (word × FdEntry) :=
 /-- The model the checks run in: the fd table above, an empty VM ledger,
     an empty file system, EOF on stdin, no halt and no rlimit. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- `path_openers` counts both file constructors by path: `out` is named
     once, `dup` twice. -/
@@ -470,3 +462,4 @@ example : errno_ret EINVAL = BitVec.ofInt 64 (-22) := by decide
 example : (mkEffect (BitVec.ofInt 64 0) [] []).eff_ret = 0 := rfl
 
 end LinuxSem.Checks.Sys.Fs.Locks
+

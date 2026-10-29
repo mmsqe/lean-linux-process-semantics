@@ -31,11 +31,10 @@
   `CheckUnmodeled`-vs-`CheckOk` equality is eliminated by `nomatch`, or by
   `check_ret_only_no_unmodeled` for the never-declining arm.
 
-  The arms differ only in the word they answer, so the two directions of
-  the `check_ret_only` correspondence and the spec's never-`unmodeled` fact
-  are stated once below, as `arm_ok`, `arm_check_ok` and
-  `arm_ne_unmodeled` — private helpers with no public surface, and the same
-  three the `Sync` checker carries.
+  The arms differ only in the word they answer, so the `check_ret_only`
+  correspondence between them is the shared `arm_ok` / `arm_check_ok` (see
+  `Checks.Sys.Prelude`); only the spec's never-`unmodeled` fact is stated
+  below, as `ret_only_ne_unmodeled`.
 -/
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Fs.Ioctl
@@ -77,36 +76,12 @@ def check_ioctl (fd req : word) (eff : SyscallEffect) (m : Model) : check_result
 
    Every answered arm of `check_ioctl` answers through `check_ret_only`
    with one word, and the spec's matching arm is `ret_only`/`err_ret` with
-   the same word; writing the resulting three-line proof out in every arm
-   of all four theorems would repeat it, so it is stated twice.  The third
-   helper is the spec's side of the two `unmodeled` arms' absence: no
-   `ret_only` (hence no `err_ret`) answers `unmodeled`.
+   the same word; that correspondence is the shared `arm_ok` /
+   `arm_check_ok` (see `Checks.Sys.Prelude`).  The one helper this file
+   needs is the spec's side of the two `unmodeled` arms' absence — no
+   `ret_only` (hence no `err_ret`) answers `unmodeled` — which is the shared
+   `ret_only_ne_unmodeled` of `Checks.Sys.Prelude`, opened above.
    ========================================================================= -/
-
-/-- Checker → spec, for one arm: an accepted `check_ret_only` *is* the
-    spec's `ret_only` at that word, with the claimed model and events. -/
-private theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨rfl, rfl, rfl⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  exact pure_ok _ i _
-
-/-- Spec → checker, for one arm: an outcome of the spec's `ret_only` at
-    that word is accepted by `check_ret_only` at the same word. -/
-private theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨rfl, rfl, rfl⟩ := H
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- Neither of the spec's two arm shapes can answer `unmodeled`: both are
-    `ret_only`, whose only outcome is `.ok … []`. -/
-private theorem arm_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  exact nomatch H
 
 /-- The nine enumerated open-fd arms answer alike — the [tty_only_request]
     test — so each of them closes with this, in the accept direction.
@@ -159,7 +134,7 @@ private theorem grouped_complete_unmodeled (req : word) (eff : SyscallEffect)
       else .CheckUnmodeled) = .CheckUnmodeled := by
   by_cases ht : tty_only_request req = true
   · simp only [ite_eq_left ht] at H ⊢
-    exact absurd H (arm_ne_unmodeled _ i m)
+    exact absurd H (ret_only_ne_unmodeled _ i m)
   · -- the checker declines and so does the spec: both sides are `CheckUnmodeled`
     simp only [ite_eq_right ht] at H ⊢
 
@@ -251,7 +226,7 @@ theorem check_ioctl_complete_unmodeled (fd req : word) (m : Model) (i : SyscallI
   cases e with
   | none =>
     dsimp only at H ⊢
-    exact absurd H (arm_ne_unmodeled _ i m)
+    exact absurd H (ret_only_ne_unmodeled _ i m)
   | some e =>
     cases e with
     | FdChannel _ => exact grouped_complete_unmodeled req eff m i H
@@ -298,7 +273,7 @@ private def portFds : List (word × FdEntry) :=
 /-- The model the checks run in: the table above, an empty VM ledger, an
     empty file system, EOF on stdin, no halt and no rlimit. -/
 private def portModel : Model :=
-  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- FIONREAD (0x541B) is **not** one of the eight, although it shares the
     0x54 magic: `tty_only_request` is an explicit list, not a magic-letter
@@ -402,3 +377,4 @@ example : errno_ret EBADF = BitVec.ofInt 64 (-9) := by decide
 example : errno_ret ENOTTY = BitVec.ofInt 64 (-25) := by decide
 
 end LinuxSem.Checks.Sys.Fs.Ioctl
+

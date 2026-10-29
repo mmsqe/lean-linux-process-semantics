@@ -122,22 +122,6 @@ private theorem eff_shape_ok {f : word → List (word × word) → check_result}
     `Checks/Sys/Kernel/Time/PosixTimers.lean` carries privately for its
     clock update. -/
 
-/-- `bind` over a `modify`: the continuation runs on the updated model. -/
-private theorem modify_bind_ok_inv {B : Type} (f : Model → Model) (k : Unit → SysSpec B)
-    (i : SyscallInput) (m : Model) (y : B) (m' : Model) (evs : List event)
-    (H : bind (modify f) k i m (.ok y m' evs)) :
-    k () i (f m) (.ok y m' evs) := by
-  unfold LinuxSem.LinuxProcessSem.bind
-    LinuxSem.LinuxProcessSem.modify at H
-  obtain ⟨x, m1, evs1, evs2, hc, hk, hevs⟩ := H
-  cases x
-  simp only [Outcome.ok.injEq, true_and] at hc
-  obtain ⟨hm1, hevs1⟩ := hc
-  subst hm1; subst hevs1
-  simp only [List.nil_append] at hevs
-  subst hevs
-  exact hk
-
 /-! ## The four agreement theorems -/
 
 section
@@ -404,3 +388,4 @@ example (m : Model) (eff : SyscallEffect) (hm : m_vmmaps m =
     ite_eq_right (by decide)]
 
 end LinuxSem.Checks.Sys.Mm.Madvise
+

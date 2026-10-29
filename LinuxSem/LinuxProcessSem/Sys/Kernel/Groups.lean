@@ -228,7 +228,7 @@ private def check_model (gs : List word) : Model :=
     { cr_uid := overflow_id, cr_euid := overflow_id, cr_suid := overflow_id
       cr_gid := overflow_id, cr_egid := overflow_id, cr_sgid := overflow_id
       cr_groups := gs }
-    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none)
+    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [])
 
 /-- The same model with `euid = 0`: the one id `creds_privileged` reads. -/
 private def check_model_root (gs : List word) : Model :=
@@ -237,7 +237,7 @@ private def check_model_root (gs : List word) : Model :=
       cr_suid := overflow_id
       cr_gid := overflow_id, cr_egid := overflow_id, cr_sgid := overflow_id
       cr_groups := gs }
-    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none)
+    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [])
 
 /-- The count `getgroups` reports: the length of the model's stored list,
     read back as the `int` the syscall returns. -/

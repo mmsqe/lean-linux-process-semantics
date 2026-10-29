@@ -604,41 +604,16 @@ private def emptyInput : SyscallInput :=
 /-- A model with no pinned tid: `m_tid` is `none`, so only a zero pid can
     name the caller. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The effect of a call that answered `r` after copying `param` in: the
     answer, no writes, and the copy-in range on the ledger. -/
 private abbrev effCopy (r param : word) : SyscallEffect :=
   ⟨r, [], [], [], [], [(param, 4)]⟩
 
-/-- Reading the syscall input is pure — the twin of `Monad.bind_getModel`,
-    proved here once.  No such lemma is needed elsewhere: the `input` read
-    and the rest of the chain are one `bind`. -/
-private theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-      simp only [bind]
-      constructor
-      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-        simp only [inputSpec, input, Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        simp only [List.nil_append] at h3
-        subst h3
-        exact h2
-      · intro h
-        exact ⟨i, m, [], evs, rfl, h, by simp⟩
-  | unmodeled =>
-      simp only [bind]
-      constructor
-      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
-        · exact absurd h (by simp [inputSpec, input])
-        · simp only [inputSpec, input, Outcome.ok.injEq] at h1
-          obtain ⟨rfl, rfl, rfl⟩ := h1
-          exact h2
-      · intro h
-        exact Or.inr ⟨i, m, [], rfl, h⟩
+-- Reading the syscall input is pure — the twin of `Monad.bind_getModel`,
+-- canonical as `MonadInstances.bind_inputSpec`: the checks below peel the
+-- spec's `i <- input` with that lemma rather than a local copy.
 
 /-- `record_copyins reads (ret_only r)`: the answer `r`, no writes, and
     `reads` on the ledger.  (`record_copyins` prepends to `eff.eff_copyins`,
@@ -819,7 +794,7 @@ private theorem prio100_read :
 
 /-- A zero pid always names the caller, whatever the model's tid is: the
     first disjunct of `sched_targets_self_b` short-circuits. -/
-private theorem self_zero (m : Model) :
+theorem self_zero (m : Model) :
     sched_targets_self_b (0 : word) m = true := by
   unfold sched_targets_self_b
   rw [show w_is0 (pid32 (0 : word)) = true from by decide]
@@ -988,3 +963,4 @@ example (i : SyscallInput) (m : Model) :
   simp [sched_yield_spec, ret_only, pure]
 
 end LinuxSem.LinuxProcessSem.Sys.Kernel.Sched.Syscalls
+

@@ -28,11 +28,11 @@
   `unmodeled` arm, so `exact nomatch H` closes the branch.
 
   The ten open-fd arms of `check_fsync` differ only in the word they
-  answer, so the two directions of the `check_ret_only` correspondence —
-  and the fact that a `ret_only` arm never answers `unmodeled` — are
-  stated once, as `arm_ok`, `arm_check_ok` and `arm_ne_unmodeled`, instead
-  of being spelled out in each of the forty-four arm proofs.  They add no
-  public surface.
+  answer, so the `check_ret_only` correspondence between them is the shared
+  `arm_ok` / `arm_check_ok`, and the fact that a `ret_only` arm never
+  answers `unmodeled` is the shared `ret_only_ne_unmodeled` — both in
+  `Checks.Sys.Prelude`, opened below — instead of being spelled out in each
+  of the forty-four arm proofs.
 -/
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Fs.Sync
@@ -74,44 +74,16 @@ def check_fsync (fd : word) (eff : SyscallEffect) (m : Model) : check_result :=
   | some FdEntry.FdDir => check_ret_only eff (BitVec.ofInt 64 0) m []
 
 /- =========================================================================
-   Private helpers: the two directions of the arm correspondence
+   A private helper: the spec's side of the arm correspondence
 
    Each of the ten open-fd arms of `check_fsync` answers through
    `check_ret_only` with one word, and the spec's matching arm is
-   `ret_only`/`err_ret` with the same word; writing the resulting
-   three-line proof out in every arm of all four theorems would repeat it,
-   so it is stated twice — once per direction.  `_sound_ok` and
-   `_complete_unmodeled` use the first, `_complete_ok` the second, and
-   `_complete_unmodeled` also uses the third (a `ret_only` arm has no
-   `unmodeled` outcome), which is what a `nomatch` then establishes.
+   `ret_only`/`err_ret` with the same word; that two-way correspondence is
+   the shared `arm_ok` / `arm_check_ok` (see `Checks.Sys.Prelude`).  The
+   third fact — a `ret_only` arm has no `unmodeled` outcome — is the shared
+   `ret_only_ne_unmodeled` of `Checks.Sys.Prelude`, opened above, which is
+   what a `nomatch` then establishes.
    ========================================================================= -/
-
-/-- Checker → spec, for one arm: an accepted `check_ret_only` *is* the
-    spec's `ret_only` at that word, with the claimed model and events. -/
-private theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨rfl, rfl, rfl⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  exact pure_ok _ i _
-
-/-- Spec → checker, for one arm: an outcome of the spec's `ret_only` at
-    that word is accepted by `check_ret_only` at the same word. -/
-private theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨rfl, rfl, rfl⟩ := H
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- Neither of the spec's two arm shapes can answer `unmodeled`: both are
-    `ret_only`, whose only outcome is `.ok … []`.  So an `unmodeled`
-    hypothesis in one of them is contradictory — which is what a `nomatch`
-    shows arm by arm. -/
-private theorem arm_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  exact nomatch H
 
 theorem check_fsync_sound_ok (fd : word) (eff : SyscallEffect) (m m' : Model)
     (evs : List event) (i : SyscallInput)
@@ -262,39 +234,39 @@ theorem check_fsync_complete_unmodeled (fd : word) (m : Model) (i : SyscallInput
   cases e with
   | none =>
     dsimp only at H ⊢
-    exact absurd H (arm_ne_unmodeled _ i m)
+    exact absurd H (ret_only_ne_unmodeled _ i m)
   | some e =>
     cases e with
     | FdChannel _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdSocket _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdPipe _ _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdDevNull _ _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdUrandom =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdFileA _ _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdFileRW _ _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdFile _ _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdFileW _ _ =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     | FdDir =>
       dsimp only at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
 
 /- =========================================================================
    Sanity checks (not library lemmas)
@@ -324,7 +296,7 @@ private def portFds : List (word × FdEntry) :=
 /-- The model the checks run in: the table above, an empty VM ledger, an
     empty file system, EOF on stdin, no halt and no rlimit. -/
 private def portModel : Model :=
-  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A CLOSED FD IS -EBADF: the lookup is what decides, before the object
     is examined. -/
@@ -400,3 +372,4 @@ example : errno_ret EINVAL = BitVec.ofInt 64 (-22) := by decide
    announces belongs to another module.) -/
 
 end LinuxSem.Checks.Sys.Fs.Sync
+

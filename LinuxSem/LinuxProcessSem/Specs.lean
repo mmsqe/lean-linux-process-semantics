@@ -75,4 +75,17 @@ example : 1 ∉ modeled_sysnos := by decide
 example : modeled_sysnos.length = 90 := by decide
 example : modeled_sysnos = modeled_sysnos.eraseDups := by decide
 
+
+/-- …and one whose test has become `false = true` is its ELSE arm. -/
+theorem ite_false_cond {α : Sort _} (a b : α) :
+    (if (false = true) then a else b) = b := by
+  rw [ite_eq_right (show ¬(false = true) by decide)]
+
+
+/-- An `if` whose test `cases` has already rewritten to the literal `true`
+    — `if true = true then a else b` — is its THEN arm. -/
+theorem ite_true_cond {α : Sort _} (a b : α) :
+    (if (true = true) then a else b) = a := by
+  rw [ite_eq_left rfl]
+
 end LinuxSem.LinuxProcessSem.Specs

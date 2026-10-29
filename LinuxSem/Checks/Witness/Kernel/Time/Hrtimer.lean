@@ -32,17 +32,7 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Kernel.Time.Hrtimer
 open LinuxSem.Checks.Witness.Prelude
-
-/-- An `if` whose test `cases` has already rewritten to the literal `true`
-    — `if true = true then a else b` — is its THEN arm. -/
-private theorem ite_true_cond {α : Sort _} (a b : α) :
-    (if (true = true) then a else b) = a := by
-  rw [ite_eq_left rfl]
-
-/-- …and one whose test has become `false = true` is its ELSE arm. -/
-private theorem ite_false_cond {α : Sort _} (a b : α) :
-    (if (false = true) then a else b) = b := by
-  rw [ite_eq_right (show ¬(false = true) by decide)]
+open LinuxSem.LinuxProcessSem.Specs
 
 /-- nanosleep: the witness always takes the COMPLETED-SLEEP arm.  That
     arm needs nothing chosen — no remainder is written — so it is
@@ -121,3 +111,6 @@ theorem nanosleep_witness_ok (i : SyscallInput) (rqtp rmtp : word) (m : Model) :
           exact pure_ok _ _ _
 
 end LinuxSem.Checks.Witness.Kernel.Time.Hrtimer
+
+
+

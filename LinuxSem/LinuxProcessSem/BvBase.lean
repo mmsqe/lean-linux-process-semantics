@@ -117,7 +117,7 @@ theorem length_Z_to_le_bytes (n : Nat) (z : Int) :
 
 /-- One byte off the front of a little-endian read: the byte is the low
     eight bits and the rest is shifted up by eight. -/
-private theorem bytes_le_to_Nat_cons (b : byte) (rest : List byte) :
+theorem bytes_le_to_Nat_cons (b : byte) (rest : List byte) :
     bytes_le_to_Nat (b :: rest) = bytes_le_to_Nat rest * 256 + b.toNat := by
   have hb : b.toNat < 2 ^ 8 := b.isLt
   simp only [bytes_le_to_Nat]
@@ -160,7 +160,7 @@ private theorem mod_pow8_succ (k m : Nat) :
 
 /-- The round trip at `Nat`: the `k` low bytes of `m` read back as `m`
     truncated to `8k` bits. -/
-private theorem bytes_le_to_Nat_Z_to_le_bytes (k : Nat) (m : Nat) :
+theorem bytes_le_to_Nat_Z_to_le_bytes (k : Nat) (m : Nat) :
     bytes_le_to_Nat (Z_to_le_bytes k (m : Int)) = m % 2 ^ (8 * k) := by
   induction k generalizing m with
   | zero => rw [Z_to_le_bytes, Nat.mod_one]; rfl
@@ -180,4 +180,34 @@ theorem bytes_le_to_Z_of_le_bytes (k : Nat) (z : Int) (Hz : 0 ≤ z) :
   unfold bytes_le_to_Z
   rw [bytes_le_to_Nat_Z_to_le_bytes, Int.natCast_emod]
 
+/-! ## The `Int`/`BitVec` round trips
+
+The three facts below are the ones the byte-level proofs reach for when a
+`Nat` (a byte, a length, a shift) has to pass through an `Int` and come back.
+They used to be restated privately in every module that needed them —
+`ofInt_toNat` in seven files, `toNat_ofInt_8_nat` and
+`int_shiftRight_8_natCast` in six each (`Common/AxSymExec3Sound`,
+`Common/AllocSim`, `Common/BackingAlgebra`, `Common/FileSim`,
+`Common/StepTac`, `LinuxProcessSem/Sys/Uapi`, `Checks/Witness/...`) — so
+they live here once, next to the encoders they are about. -/
+
+/-- Re-wrapping the unsigned value of a word at 64 bits gives the word back. -/
+theorem ofInt_toNat (w : word) : BitVec.ofInt 64 (w.toNat : Int) = w := by
+  rw [BitVec.ofInt_natCast]
+  apply BitVec.eq_of_toNat_eq
+  rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt w.isLt]
+
+/-- The low byte of a `Nat`, as the byte encoders write it. -/
+theorem toNat_ofInt_8_nat (m : Nat) : (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
+  rw [BitVec.toNat_ofInt, Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
+  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
+  simp
+
+/-- Dropping the low byte of a `Nat` read as an `Int` is its quotient by 256. -/
+theorem int_shiftRight_8_natCast (m : Nat) :
+    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
+  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
+
 end LinuxSem.LinuxProcessSem
+
+

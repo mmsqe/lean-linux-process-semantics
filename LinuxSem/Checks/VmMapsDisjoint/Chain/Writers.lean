@@ -65,6 +65,8 @@ open LinuxSem.Checks.VmMapsDisjoint
 
 namespace LinuxSem.Checks.VmMapsDisjoint
 
+open LinuxSem.Common.RocqSpelling
+
 /-! ## The four ledger shapes, and what each does to the invariant
 
     `vm_wf h` is `maps_wf (vm_maps h)`, so a writer's proof only ever has

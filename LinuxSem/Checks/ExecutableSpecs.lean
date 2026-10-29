@@ -352,4 +352,18 @@ example (i : SyscallInput) (eff : SyscallEffect) (m m' m'' : Model) (evs : List 
     check_syscall_for_run i eff m = some (.CheckOk m'' evs) := by
   simp only [check_syscall_for_run, h, hpost]
 
+
+
+
+
+
+/-- The `region_free` readings the lemmas below need: freeness of an
+    appended ledger is freeness of its right half, and freeness survives
+    dropping an entry. -/
+theorem region_free_app_r (l1 l2 : List (word × word)) (lo n : word)
+    (H : region_free (l1 ++ l2) lo n = true) : region_free l2 lo n = true := by
+  apply region_free_intro
+  intro a sz Hin
+  exact region_free_In _ _ _ _ _ H (List.mem_append.mpr (Or.inr Hin))
+
 end LinuxSem.Checks.ExecutableSpecs

@@ -26,7 +26,7 @@ namespace LinuxSem.Checks.Sys.Prelude
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
-open LinuxSem.LinuxProcessSem.Sys.Syscall (record_copyins record_copyins_ok_empty)
+open LinuxSem.LinuxProcessSem.Sys.Syscall (record_copyins record_copyins_ok_empty err_ret ret_only errno_from)
 open LinuxSem.LinuxProcessSem.Sys.Uaccess (write_source)
 
 /-- The spec monad's [bind] under an unambiguous name.  Lean's root [bind]
@@ -126,14 +126,6 @@ theorem writes_eqb_eq (l1 l2 : List (word × List byte)) : writes_eqb l1 l2 = tr
       obtain ⟨a2, bs2⟩ := hd2
       simp [writes_eqb, Bool.and_eq_true, Fs.bv_eqb_eq, listN_eqb_eq, ih]
 
-/-- Range of a 64-bit word's unsigned value, with the modulus exposed as
-    the [two_pow_64] constant. -/
-theorem word_unsigned_range (w : word) :
-    0 ≤ (w.toNat : Int) ∧ (w.toNat : Int) < two_pow_64 := by
-  have h := w.isLt
-  unfold two_pow_64
-  omega
-
 /-- The unsigned value of an in-range errno return. -/
 theorem errno_ret_unsigned (e : Int) (h1 : 1 ≤ e) (h2 : e ≤ 4095) :
     ((errno_ret e).toNat : Int) = two_pow_64 - e := by
@@ -154,7 +146,7 @@ theorem errno_ret_error_b (e : Int) (h1 : 1 ≤ e) (h2 : e ≤ 4095) :
 theorem addr_is_error_b_errno (r : word) (H : addr_is_error_b r = true) :
     ∃ e, 1 ≤ e ∧ e ≤ 4095 ∧ r = errno_ret e := by
   have h2p : two_pow_64 = (18446744073709551616 : Int) := by decide
-  have hr := word_unsigned_range r
+  have hr := bv_unsigned_range_u64 r
   unfold addr_is_error_b at H
   rw [decide_eq_true_eq] at H
   have h1 : 1 ≤ two_pow_64 - (r.toNat : Int) := by omega
@@ -1043,3 +1035,251 @@ example (r : word) :
     LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only r =
       LinuxSem.LinuxProcessSem.pure (mkEffect r [] []) := by
   sys_unfold
+
+/- =========================================================================
+   The arm correspondence, once
+
+   Every answered arm of every checker answers through `check_ret_only` with
+   one word, and the matching arm of its spec is `ret_only` at the same word
+   (`err_ret` is its `-errno` case).  The two directions below are the whole
+   of that correspondence, and they mention no particular syscall: they were
+   restated privately in each checker file that had arms (`Checks/Sys/Fs/
+   Ioctl`, `Timerfd`, `Sync`, `Fcntl`, `Checks/Sys/Net/Socket{,/Socket}`),
+   which is what these replace.
+   ========================================================================= -/
+
+/-- Checker → spec, for one arm: an accepted `check_ret_only` *is* the
+    spec's `ret_only` at that word, with the claimed model and events. -/
+theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
+    (evs : List event) (i : SyscallInput)
+    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
+    LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only r i m (.ok eff m' evs) := by
+  obtain ⟨rfl, rfl, rfl⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
+  exact pure_ok _ i _
+
+/-- Spec → checker, for one arm: an outcome of the spec's `ret_only` at that
+    word is accepted by `check_ret_only` at the same word. -/
+theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
+    (evs : List event) (i : SyscallInput)
+    (H : LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only r i m (.ok eff m' evs)) :
+    check_ret_only eff r m [] = .CheckOk m' evs := by
+  obtain ⟨rfl, rfl, rfl⟩ := H
+  simp [check_ret_only, bv_eqb_refl]
+
+/- =========================================================================
+   Facts moved here from the per-syscall checkers
+
+   Each was stated privately in several sibling modules — the same claim,
+   the same proof — so it is stated once here and the checkers cite it.
+   ========================================================================= -/
+
+/-- A bare return — hence an errno return, which is one — never declines:
+    `pure` has one outcome shape, `.ok … []`.  This is what refutes every
+    errno arm of a `complete_unmodeled` walk. -/
+theorem ret_only_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
+    ¬ ret_only r i m .unmodeled := by
+  intro H
+  exact nomatch H
+
+/-- Invert one `seqSpec (modifySpec f)` / `ret_only r` step: the effect is
+    the single return [r], the model is [f m], and nothing is emitted.  The
+    acceptors build exactly these two shapes, so the inverse is stated once
+    here. -/
+theorem seqSpec_modify_ret_only_inv (f : Model → Model) (r : word)
+    (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
+    (H : seqSpec (modifySpec f) (ret_only r) i m (.ok eff m' evs)) :
+    eff = mkEffect r [] [] ∧ m' = f m ∧ evs = [] := by
+  obtain ⟨u, m2, evs1, evs2, hm, hr, hevs⟩ := H
+  cases hm
+  cases hr
+  simp only [List.nil_append] at hevs
+  exact ⟨rfl, rfl, hevs⟩
+
+/-- A `modify`-then-return step never declines; its first component is a
+    state write and its second a `pure`.  Stated here, as above. -/
+theorem seqSpec_modify_ret_only_never_unmodeled (f : Model → Model) (r : word)
+    (i : SyscallInput) (m : Model) :
+    ¬ seqSpec (modifySpec f) (ret_only r) i m .unmodeled := by
+  intro H
+  rcases H with hm | ⟨u, m2, evs2, hm, hr⟩
+  · exact nomatch hm
+  · exact nomatch hr
+
+/-- An accepted [check_ret_only] hands back the model it was
+    given, so it leaves [m_vmmaps] alone.  [check_ret_only_ok_iff] says
+    the same thing; this is the one-projection corollary the frame lemmas
+    below share. -/
+theorem check_ret_only_frame (eff : SyscallEffect) (r : word)
+    (m m' : Model) (evs : List event)
+    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
+    m_vmmaps m' = m_vmmaps m := by
+  obtain ⟨-, rfl, -⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
+  rfl
+
+/-- [alloc_fd] never runs past its scan bound: the candidate grows by one
+    per failed lookup and the fuel shrinks by one, so the answer is at
+    most [cand + fuel].
+
+    The bound is stated in `Nat` because that is the form Lean's bitvector
+    arithmetic gives (`toNat` of a sum needs the modulus side condition in
+    `Nat` either way), and [alloc_fd_le] — the only consumer — reads the
+    same bound out of it. -/
+theorem alloc_fd_aux_le (fds : List (word × FdEntry)) (cand : word) (f : Nat)
+    (h : cand.toNat + f < 2 ^ 64) :
+    (alloc_fd_aux fds cand f).toNat ≤ cand.toNat + f := by
+  induction f generalizing cand with
+  | zero => simp [alloc_fd_aux]
+  | succ f ih =>
+    rw [show alloc_fd_aux fds cand (f + 1) =
+        (match fd_lookup fds cand with
+         | none => cand
+         | some _ => alloc_fd_aux fds (cand + 1) f) from rfl]
+    split
+    · omega
+    · have h1 : cand.toNat + 1 < 2 ^ 64 := by omega
+      have hsucc : (cand + 1).toNat = cand.toNat + 1 := by
+        have hone : ((1 : word)).toNat = 1 := by decide
+        rw [BitVec.toNat_add, hone, Nat.mod_eq_of_lt h1]
+      have h2 : (cand + 1).toNat + f < 2 ^ 64 := by rw [hsucc]; omega
+      have h3 := ih (cand + 1) h2
+      rw [hsucc] at h3
+      omega
+
+/-- The advertised bound on a fresh descriptor: at most 4096, far below
+    the error-encoding window (`two_pow_64 - 4096`). -/
+theorem alloc_fd_le (fds : List (word × FdEntry)) : (alloc_fd fds).toNat ≤ 4096 := by
+  unfold alloc_fd
+  have h0 : (BitVec.ofInt 64 0 : word).toNat = 0 := by decide
+  have h1 : (BitVec.ofInt 64 0 : word).toNat + 4096 < 2 ^ 64 := by
+    rw [h0]
+    decide
+  simpa [h0] using alloc_fd_aux_le fds (BitVec.ofInt 64 0) 4096 h1
+
+/-- In particular an allocated fd never matches an injectable errno
+    ([Prelude.errno_ret_in_fd] plus the bound above). -/
+theorem errno_ret_in_alloc_fd (es : List Int) (fds : List (word × FdEntry))
+    (Hok : errnos_ok es = true) : errno_ret_in es (alloc_fd fds) = false := by
+  apply errno_ret_in_fd es (alloc_fd fds) Hok
+  have h := alloc_fd_le fds
+  have h2 : (4096 : Int) < 2147483648 := by decide
+  show ((alloc_fd fds).toNat : Int) < 2147483648
+  omega
+
+theorem errno_arm_ne_unmodeled (es : List Int) (i : SyscallInput) (m : Model) :
+    ¬ bind (errno_from es) (fun e => err_ret e) i m .unmodeled := by
+  intro H
+  unfold LinuxSem.LinuxProcessSem.bind at H
+  rcases H with Hc | ⟨e, m1, evs1, Hc, Hret⟩
+  · unfold errno_from choose at Hc
+    obtain ⟨x, hx, hok⟩ := Hc
+    simp at hok
+  · unfold err_ret ret_only LinuxSem.LinuxProcessSem.pure at Hret
+    exact nomatch Hret
+
+theorem modifySpec_no_unmodeled (f : Model → Model) (i : SyscallInput) (m : Model) :
+    ¬ modifySpec f i m .unmodeled := by
+  intro h
+  simp only [modifySpec, LinuxSem.LinuxProcessSem.modify] at h
+  exact nomatch h
+
+/-- `bind` over a `modify`: the continuation runs on the updated model. -/
+theorem modify_bind_ok_inv {B : Type} (f : Model → Model) (k : Unit → SysSpec B)
+    (i : SyscallInput) (m : Model) (y : B) (m' : Model) (evs : List event)
+    (H : bind (modify f) k i m (.ok y m' evs)) :
+    k () i (f m) (.ok y m' evs) := by
+  unfold LinuxSem.LinuxProcessSem.bind
+    LinuxSem.LinuxProcessSem.modify at H
+  obtain ⟨x, m1, evs1, evs2, hc, hk, hevs⟩ := H
+  cases x
+  simp only [Outcome.ok.injEq, true_and] at hc
+  obtain ⟨hm1, hevs1⟩ := hc
+  subst hm1; subst hevs1
+  simp only [List.nil_append] at hevs
+  subst hevs
+  exact hk
+
+/-- The injected errno, inverted: an errno from the injectable set with no
+    ledger at all. -/
+theorem errno_from_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
+    (eff : SyscallEffect) (m' : Model) (evs : List event)
+    (H : LinuxSem.LinuxProcessSem.bind (errno_from es)
+      (fun e => err_ret e) i m (.ok eff m' evs)) :
+    ∃ e, e ∈ es ∧ eff = mkEffect (errno_ret e) [] [] ∧ m' = m ∧ evs = [] := by
+  obtain ⟨e, m1, evs1, evs2, hc, hk, hevs⟩ := H
+  unfold errno_from choose at hc
+  obtain ⟨e0, hmem, hok⟩ := hc
+  simp only [Outcome.ok.injEq] at hok
+  obtain ⟨rfl, rfl, rfl⟩ := hok
+  simp only [err_ret, ret_only, LinuxSem.LinuxProcessSem.pure,
+    Outcome.ok.injEq] at hk
+  obtain ⟨heff, hm, hevs2⟩ := hk
+  subst hevs2
+  refine ⟨e, hmem, heff, hm, ?_⟩
+  simpa using hevs
+
+theorem alloc_fd_not_error_b (fds : List (word × FdEntry)) :
+    addr_is_error_b (alloc_fd fds) = false := by
+  have h := alloc_fd_le fds
+  unfold addr_is_error_b
+  rw [decide_eq_false_iff_not]
+  unfold two_pow_64
+  omega
+
+/-- [bind] over the environment's [choose]: an accepted outcome names the
+    chosen value and its evidence.  ([choose] has no inversion lemma, and
+    the checkers need one in both outcome shapes.) -/
+theorem choose_bind_ok_inv {A B : Type} (P : A → Prop) (k : A → SysSpec B)
+    (i : SyscallInput) (m : Model) (y : B) (m' : Model) (evs : List event)
+    (H : bind (choose P) k i m (.ok y m' evs)) :
+    ∃ x, P x ∧ k x i m (.ok y m' evs) := by
+  unfold LinuxSem.LinuxProcessSem.bind
+    LinuxSem.LinuxProcessSem.choose at H
+  obtain ⟨x, m1, evs1, evs2, hc, hk, hevs⟩ := H
+  obtain ⟨x0, hP, hok⟩ := hc
+  simp only [Outcome.ok.injEq] at hok
+  obtain ⟨hx, hm1, hevs1⟩ := hok
+  subst hx; subst hm1; subst hevs1
+  simp only [List.nil_append] at hevs
+  subst hevs
+  exact ⟨_, hP, hk⟩
+
+/-- An accepted outcome forces the effect's shape: exactly one write, at
+    some address, of some byte list — and the branch body accepted it. -/
+theorem eff_shape_ok {f : word → word → List byte → check_result}
+    {eff : SyscallEffect} {m' : Model} {evs : List event}
+    (H : (match eff with
+          | ⟨r, [(a, bs)], [], [], [], []⟩ => f r a bs
+          | _ => .CheckReject) = .CheckOk m' evs) :
+    ∃ r a bs, eff = ⟨r, [(a, bs)], [], [], [], []⟩ ∧ f r a bs = .CheckOk m' evs := by
+  obtain ⟨r, ws, zs, us, cs, ks⟩ := eff
+  split at H
+  · rename_i r' a' bs' heq
+    exact ⟨r', a', bs', heq, H⟩
+  · exact nomatch H
+
+/-- The same inversion in the [Unmodeled] shape: [choose] itself never
+    declines, so the decline is the continuation's. -/
+theorem choose_bind_unmodeled_inv {A B : Type} (P : A → Prop) (k : A → SysSpec B)
+    (i : SyscallInput) (m : Model)
+    (H : bind (choose P) k i m .unmodeled) :
+    ∃ x, P x ∧ k x i m .unmodeled := by
+  unfold LinuxSem.LinuxProcessSem.bind
+    LinuxSem.LinuxProcessSem.choose at H
+  rcases H with h | ⟨x, m1, evs1, hc, hk⟩
+  · obtain ⟨x, hP, hok⟩ := h
+    exact nomatch hok
+  · obtain ⟨x0, hP, hok⟩ := hc
+    simp only [Outcome.ok.injEq] at hok
+    obtain ⟨hx, hm1, hevs1⟩ := hok
+    subst hx; subst hm1; subst hevs1
+    exact ⟨_, hP, hk⟩
+
+/-- `unmodeled` is not an `ok` outcome — the shape every inverted spec arm
+    rules out when the spec is asked for an `unmodeled` answer.  (Stated as
+    a simp rule because the arms above are `bind chains of `choose` /
+    `modify` / `pure`, whose `unmodeled` case is exactly this equality.) -/
+theorem unmodeled_ne_ok {A M E : Type} (x : A) (m : M) (evs : List E) :
+    (Outcome.unmodeled : Outcome A M E) ≠ .ok x m evs := by
+  intro h
+  exact nomatch h
+

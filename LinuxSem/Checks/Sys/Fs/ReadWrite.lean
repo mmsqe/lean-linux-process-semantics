@@ -1226,16 +1226,6 @@ def check_readv (i : SyscallInput) (fd iov iovcnt : word)
    never `split`: `split` generalises the stuck `if` under them.
    ------------------------------------------------------------------------- -/
 
-/-- An accepted [check_ret_only] hands back the model it was
-    given, so it leaves [m_vmmaps] alone.  The one-projection corollary of
-    `check_ret_only_ok_iff`. -/
-private theorem rw_ret_only_frame (eff : SyscallEffect) (r : word)
-    (m m' : Model) (evs : List event)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    m_vmmaps m' = m_vmmaps m := by
-  obtain ⟨-, rfl, -⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rfl
-
 /-- The imported-vector body of `readv` leaves [m_vmmaps] alone: no branch
     of it writes to `m_vm`, and the three that rebuild the model rebuild
     `m_stdin` or `m_fds` only.  Public because
@@ -1249,7 +1239,7 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
   try dsimp only at H
   by_cases hz : (iovs_total (cap_iovecs iovs0) == 0) = true
   · rw [ite_eq_left hz] at H
-    exact rw_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
+    exact check_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
   · rw [ite_eq_right hz] at H
     try dsimp only at H
     cases e with
@@ -1257,13 +1247,13 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
       try dsimp only at H
       generalize hs : m_stdin m 0 = st at H
       cases st with
-      | none => exact rw_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
+      | none => exact check_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
       | some b0 =>
         try dsimp only at H
         generalize hone : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
           [BitVec.ofInt 8 0] = one at H
         cases one with
-        | none => exact rw_ret_only_frame eff (errno_ret EFAULT) m m' evs H
+        | none => exact check_ret_only_frame eff (errno_ret EFAULT) m m' evs H
         | some one =>
           try dsimp only at H
           generalize hneed : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
@@ -1302,21 +1292,21 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
     | RdSocket sk =>
       try dsimp only at H
       cases sk with
-      | SkFresh => exact rw_ret_only_frame eff (errno_ret ENOTCONN) m m' evs H
-      | SkBound => exact rw_ret_only_frame eff (errno_ret ENOTCONN) m m' evs H
-      | SkListening => exact rw_ret_only_frame eff (errno_ret ENOTCONN) m m' evs H
-      | SkReset peer ch => exact rw_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
+      | SkFresh => exact check_ret_only_frame eff (errno_ret ENOTCONN) m m' evs H
+      | SkBound => exact check_ret_only_frame eff (errno_ret ENOTCONN) m m' evs H
+      | SkListening => exact check_ret_only_frame eff (errno_ret ENOTCONN) m m' evs H
+      | SkReset peer ch => exact check_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
       | SkConnected peer ch rx =>
         try dsimp only at H
         generalize hrx : rx 0 = st at H
         cases st with
-        | fin => exact rw_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
+        | fin => exact check_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
         | rst =>
-          exact rw_ret_only_frame eff (errno_ret ECONNRESET)
+          exact check_ret_only_frame eff (errno_ret ECONNRESET)
             (with_fds (fd_insert (m_fds m) fd
               (FdEntry.FdSocket (SockState.SkReset peer ch))) m) m' evs H
         | timedOut =>
-          exact rw_ret_only_frame eff (errno_ret ETIMEDOUT)
+          exact check_ret_only_frame eff (errno_ret ETIMEDOUT)
             (with_fds (fd_insert (m_fds m) fd
               (FdEntry.FdSocket (SockState.SkReset peer ch))) m) m' evs H
         | cons b0 =>
@@ -1324,7 +1314,7 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
           generalize hone : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
             [BitVec.ofInt 8 0] = one at H
           cases one with
-          | none => exact rw_ret_only_frame eff (errno_ret EFAULT) m m' evs H
+          | none => exact check_ret_only_frame eff (errno_ret EFAULT) m m' evs H
           | some one =>
             try dsimp only at H
             generalize hneed : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
@@ -1364,12 +1354,12 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
       try dsimp only at H
       unfold check_readv_gap at H
       exact nomatch H
-    | RdDevNull => exact rw_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
+    | RdDevNull => exact check_ret_only_frame eff (BitVec.ofInt 64 0) m m' evs H
     | RdUrandom =>
       try dsimp only at H
       unfold check_readv_gap at H
       exact nomatch H
-    | RdDir => exact rw_ret_only_frame eff (errno_ret EISDIR) m m' evs H
+    | RdDir => exact check_ret_only_frame eff (errno_ret EISDIR) m m' evs H
     | RdFile p off =>
       try dsimp only at H
       generalize hfs : Fs.fs_lookup (m_fs m) p = lk at H
@@ -1382,7 +1372,7 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
         try dsimp only at H
         by_cases hpos : rw_pos_einvalb off (iovs_total (cap_iovecs iovs0)) = true
         · rw [ite_eq_left hpos] at H
-          exact rw_ret_only_frame eff (errno_ret EINVAL) m m' evs H
+          exact check_ret_only_frame eff (errno_ret EINVAL) m m' evs H
         · rw [ite_eq_right hpos] at H
           try dsimp only at H
           generalize hsc : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
@@ -1416,7 +1406,7 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
             generalize hone : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
               [BitVec.ofInt 8 0] = one at H
             cases one with
-            | none => exact rw_ret_only_frame eff (errno_ret EFAULT) m m' evs H
+            | none => exact check_ret_only_frame eff (errno_ret EFAULT) m m' evs H
             | some one =>
               try dsimp only at H
               unfold check_readv_gap at H
@@ -1433,7 +1423,7 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
         try dsimp only at H
         by_cases hpos : rw_pos_einvalb off (iovs_total (cap_iovecs iovs0)) = true
         · rw [ite_eq_left hpos] at H
-          exact rw_ret_only_frame eff (errno_ret EINVAL) m m' evs H
+          exact check_ret_only_frame eff (errno_ret EINVAL) m m' evs H
         · rw [ite_eq_right hpos] at H
           try dsimp only at H
           generalize hsc : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
@@ -1467,7 +1457,7 @@ theorem check_readv_imported_frame (i : SyscallInput) (fd : word)
             generalize hone : scatter_iovecs i.in_wmem (cap_iovecs iovs0)
               [BitVec.ofInt 8 0] = one at H
             cases one with
-            | none => exact rw_ret_only_frame eff (errno_ret EFAULT) m m' evs H
+            | none => exact check_ret_only_frame eff (errno_ret EFAULT) m m' evs H
             | some one =>
               try dsimp only at H
               unfold check_readv_gap at H
@@ -4635,18 +4625,11 @@ theorem seqSpec_set_fds_deliver_ok_inv (fds : List (word × FdEntry)) (ch : word
   cases h3
   exact ⟨rfl, rfl, rfl⟩
 
-/-- A `bind` whose first stage is a `choose` hands back the
-    chosen value and the choice's premise. -/
-theorem choose_bind_ok_inv {A B : Type} (P : A → Prop) (k : A → SysSpec B)
-    (i : SyscallInput) (m : Model) (x : B) (m' : Model) (evs : List event)
-    (H : bind (choose P) k i m (.ok x m' evs)) :
-    ∃ a, P a ∧ k a i m (.ok x m' evs) := by
-  unfold LinuxSem.LinuxProcessSem.bind at H
-  obtain ⟨a, m1, ev1, ev2, ⟨a', hP, ho⟩, hk, hevs⟩ := H
-  simp only [Outcome.ok.injEq] at ho
-  obtain ⟨rfl, rfl, rfl⟩ := ho
-  cases hevs
-  exact ⟨a, hP, hk⟩
+/- A `bind` whose first stage is a `choose` hands back the chosen value and
+   the choice's premise: [LinuxSem.Checks.Sys.Prelude.choose_bind_ok_inv],
+   in scope here through the [open LinuxSem.Checks.Sys.Prelude] above.  The
+   claim is stated once, in the shared `Checks` prelude, and is not
+   restated in this file. -/
 
 /-- The channel read's delivered-prefix guard, evaluated at the
     spec's `choose` witness (`a = buf`, `ret = len_word bs`). -/
@@ -5546,12 +5529,6 @@ theorem choose_no_unmodeled {A : Type} (P : A → Prop) (i : SyscallInput) (m : 
   rintro ⟨x, -, h⟩
   exact nomatch h
 
-theorem modifySpec_no_unmodeled (f : Model → Model) (i : SyscallInput) (m : Model) :
-    ¬ modifySpec f i m .unmodeled := by
-  intro h
-  simp only [modifySpec, LinuxSem.LinuxProcessSem.modify] at h
-  exact nomatch h
-
 theorem bind_no_unmodeled {A B : Type} (c : SysSpec A) (k : A → SysSpec B)
     (i : SyscallInput) (m : Model)
     (hc : ¬ c i m .unmodeled)
@@ -5973,5 +5950,74 @@ theorem check_read_complete_unmodeled (i : SyscallInput) (fd buf count : word)
         cases Hs
       · rw [ite_eq_right hak] at Hs ⊢
         exact check_read_urandom_complete_unmodeled i buf count m eff Hs
+
+
+/-- Invert the channel delivery stage of a vectored read. -/
+theorem wv_stdin_deliver_writes_inv (stdin : InputStream) (ch : word)
+    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput)
+    (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
+    (H : seqSpec (set_stdin stdin)
+      (seqSpec (emit (bs.map (event.ReadEv ch)))
+        (pure (mkEffect (len_word bs) writes []))) i m (.ok eff m' evs)) :
+    eff = mkEffect (len_word bs) writes [] ∧ m' = with_stdin stdin m ∧
+      evs = bs.map (event.ReadEv ch) := by
+  obtain ⟨u, m1, ev1, ev2, h1, h2, h3⟩ := H
+  simp only [set_stdin, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
+  cases h1
+  obtain ⟨y, m2, ev3, ev4, h4, h5, h6⟩ := h2
+  cases h4
+  cases h5
+  simp only [List.nil_append, List.append_nil] at h3 h6
+  cases h6
+  cases h3
+  exact ⟨rfl, rfl, rfl⟩
+
+
+/-- The same on a socket's descriptor table. -/
+theorem wv_fds_deliver_writes_inv (fds : List (word × FdEntry)) (ch : word)
+    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput)
+    (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
+    (H : seqSpec (set_fds fds)
+      (seqSpec (emit (bs.map (event.ReadEv ch)))
+        (pure (mkEffect (len_word bs) writes []))) i m (.ok eff m' evs)) :
+    eff = mkEffect (len_word bs) writes [] ∧ m' = with_fds fds m ∧
+      evs = bs.map (event.ReadEv ch) := by
+  obtain ⟨u, m1, ev1, ev2, h1, h2, h3⟩ := H
+  simp only [set_fds, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
+  cases h1
+  obtain ⟨y, m2, ev3, ev4, h4, h5, h6⟩ := h2
+  cases h4
+  cases h5
+  simp only [List.nil_append, List.append_nil] at h3 h6
+  cases h6
+  cases h3
+  exact ⟨rfl, rfl, rfl⟩
+
+
+/-- The channel readv's delivery stage, with the vectored ledger
+    (`set_stdin` + per-byte events + the arbitrary write list). -/
+theorem seqSpec_set_stdin_deliver_writes (stdin : InputStream) (ch : word)
+    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput)
+    (m : Model) :
+    seqSpec (set_stdin stdin)
+      (seqSpec (emit (bs.map (event.ReadEv ch)))
+        (pure (mkEffect (len_word bs) writes []))) i m
+      (.ok (mkEffect (len_word bs) writes []) (with_stdin stdin m)
+        (bs.map (event.ReadEv ch))) := by
+  refine ⟨(), with_stdin stdin m, [], bs.map (event.ReadEv ch), rfl, ?_, rfl⟩
+  refine ⟨(), with_stdin stdin m, bs.map (event.ReadEv ch), [], rfl, rfl, by simp⟩
+
+
+/-- The same on a socket's descriptor table. -/
+theorem seqSpec_set_fds_deliver_writes (fds : List (word × FdEntry))
+    (ch : word) (writes : List (word × List byte)) (bs : List byte)
+    (i : SyscallInput) (m : Model) :
+    seqSpec (set_fds fds)
+      (seqSpec (emit (bs.map (event.ReadEv ch)))
+        (pure (mkEffect (len_word bs) writes []))) i m
+      (.ok (mkEffect (len_word bs) writes []) (with_fds fds m)
+        (bs.map (event.ReadEv ch))) := by
+  refine ⟨(), with_fds fds m, [], bs.map (event.ReadEv ch), rfl, ?_, rfl⟩
+  refine ⟨(), with_fds fds m, bs.map (event.ReadEv ch), [], rfl, rfl, by simp⟩
 
 end LinuxSem.Checks.Sys.Fs.ReadWrite

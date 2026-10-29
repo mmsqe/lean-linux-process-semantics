@@ -2662,7 +2662,7 @@ def lseek_spec (fd off whence : word) : SysSpec SyscallEffect :=
     system, the given stdin and the given files. -/
 def sanityModel (fds : List (word × FdEntry)) (stdin : InputStream) (fs : Fs.Fs) : Model :=
   mkModel fds (mkVmMaps [] [] (BitVec.ofInt 64 0) (BitVec.ofInt 64 0) 0)
-    stdin fs none none none
+    stdin fs
 
 /-- A syscall input whose readable view is empty and whose writable view is
     `wmem`. -/

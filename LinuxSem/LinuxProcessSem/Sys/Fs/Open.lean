@@ -23,10 +23,10 @@
   `fd_lookup`, `fd_insert`, `fd_remove`; `StateInit` supplies
   `tmp_prefix`; `Fs` supplies `Fs.fs_lookup`, `Fs.fs_set`, `Fs.file_truncate`,
   `path` and `Fs.path_eqb`; `Sys.Fs.File` supplies `lowest_fd` (imported,
-  NOT redefined here) and `z_ldiff`; `Sys.Syscall` supplies `ret_only`, `err_ret`,
+  NOT redefined here); `Sys.Syscall` supplies `ret_only`, `err_ret`,
   `record_copyins`, `int32`; `Sys.Uapi` supplies the whole `O_*` flag
   layer, `S_IRWXO`, `AT_*`, `AT_FDCWD32`, `dot_path`, `devnull_path`,
-  `urandom_path`, `NAME_MAX` and `z_land`/`z_lor`.
+  `urandom_path`, `NAME_MAX` and `z_land`/`z_lor`/`z_ldiff`.
 
   `Fs.Namei`.  This file's seven path helpers (`dotdot_path`,
   `slash_byte`, `path_has_slash`, `dir_prefixb`, `fs_under`,
@@ -43,9 +43,10 @@
   should be deleted in favour of the import; nothing else from that file
   is used here.
 
-  `Z.ldiff`.  The bit-difference `a & ~b` is `z_ldiff`, defined in
-  `Sys.Fs.File` (not in `Sys/Uapi.lean`) and imported from there rather
-  than redefined (see the same note at `File.dup3_flags_ok`).
+  `Z.ldiff`.  The bit-difference `a & ~b` is `Sys.Uapi.z_ldiff`, the
+  canonical definition beside `z_land`/`z_lor`, imported rather than
+  redefined (`Sys.Fs.File.z_ldiff` is a transparent alias to it, kept at
+  that file's one caller, `dup3_flags_ok`).
 
   NOTATION.  `x <- c ;; k` is `bind c (fun x => k)`; `Z` is `Int`,
   `word` is `BitVec 64`, `byte` is `BitVec 8`, `Z_to_bv 64 n` is
@@ -70,7 +71,7 @@ namespace LinuxSem.LinuxProcessSem.Sys.Fs.Open
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd z_ldiff)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 
 /- =========================================================================
    The `Monad.lean` state setters, spelled once
@@ -2249,7 +2250,7 @@ def faccessat2_spec (dirfd pathp mode flags : word) : SysSpec SyscallEffect :=
 
 /-- The empty model the outcome checks run on: no descriptors, an empty
     file system, silent stdin.  `mkModel` is `StateLedger`'s. -/
-def chk_model : Model := mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+def chk_model : Model := mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A syscall input whose memory is the byte list `bs` starting at
     address 0 — enough for `read_cstr` to see a NUL-terminated pathname. -/
@@ -2260,7 +2261,7 @@ def chk_input (bs : List byte) : SyscallInput :=
 /-- A model holding one write-only descriptor (`fd`) on one file. -/
 def chk_model_file (fd : word) (p : Fs.path) (data : List byte) : Model :=
   mkModel [(fd, FdEntry.FdFileW p (BitVec.ofInt 64 0))] (mkVmMaps [] [] 0 0 0) IEof
-    [(p, data)] none none none
+    [(p, data)]
 
 /-! ### The decidable helpers -/
 
@@ -2446,13 +2447,13 @@ example :
 example :
     ftruncate_spec 3 1 (chk_input [])
       (mkModel [(3, FdEntry.FdFile [0x61] (BitVec.ofInt 64 0))] (mkVmMaps [] [] 0 0 0)
-        IEof [([0x61], [0x61])] none none none)
+        IEof [([0x61], [0x61])])
       (.ok (mkEffect (errno_ret EINVAL) [] [])
         (mkModel [(3, FdEntry.FdFile [0x61] (BitVec.ofInt 64 0))] (mkVmMaps [] [] 0 0 0)
-          IEof [([0x61], [0x61])] none none none) []) :=
+          IEof [([0x61], [0x61])]) []) :=
   ftruncate_spec_ro 3 1 (chk_input [])
     (mkModel [(3, FdEntry.FdFile [0x61] (BitVec.ofInt 64 0))] (mkVmMaps [] [] 0 0 0)
-      IEof [([0x61], [0x61])] none none none) [0x61] (BitVec.ofInt 64 0) (by decide) rfl
+      IEof [([0x61], [0x61])]) [0x61] (BitVec.ofInt 64 0) (by decide) rfl
 
 /-- PORT CHECK: `faccessat` F_OK on a path the image does not hold is
     `-ENOENT` (the existence arm is not taken). -/

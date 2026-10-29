@@ -1167,7 +1167,7 @@ private def demoFds : List (word × FdEntry) :=
     empty file system, EOF on stdin, no halt, no rlimit and no tid — so
     the soft RLIMIT_NOFILE is `default_nofile` = 1024. -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- Bit 5 set, and `n = 6`: fd 5 is named by the request and is not
     open, which is -EBADF whatever the other bits would have answered. -/

@@ -78,6 +78,7 @@ import LinuxSem.Common.StoreOk
 import LinuxSem.Common.SymExec
 import LinuxSem.Common.StepTac
 import LinuxSem.Common.LibMaskBits
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
 import LinuxSem.Common.AxSymExec3Sound
 
@@ -93,7 +94,7 @@ open LinuxSem.Common.CatSim
 open LinuxSem.Common.SeqExec
 open LinuxSem.Common.StoreOk
 open LinuxSem.Common.SymExec
-open LinuxSem.Common.AxSymExec3 (Z_to_bv bv_unsigned bv_signed)
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3Sound (rdn_pointwise)
 
 /-- `Local Instance asanreflect_fx : PropExec.FPState :=
@@ -404,7 +405,7 @@ theorem pf_iter (Hp : 28 ≤ p ∧ p + 32 < 2 ^ 64)
       rw [hx, Int.add_mul_emod_self_right]
     unfold v_add
     simp only [bv_unsigned_ofInt]
-    rw [LibMaskBits.Z_to_bv_mod64, hX, ← LibMaskBits.Z_to_bv_mod64]
+    rw [LinuxSem.Common.StepTac.Z_to_bv_mod64, hX, ← LinuxSem.Common.StepTac.Z_to_bv_mod64]
   have Vst : v_addi (Z_to_bv 64 (e - 4 * (i + 1))) ((0 : BitVec 12)).toInt
       = Z_to_bv 64 (e - 4 * (i + 1)) := by
     rw [show ((0 : BitVec 12)).toInt = (0 : Int) from by decide, SymExec.v_addi_lit, Int.add_zero]

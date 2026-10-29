@@ -87,70 +87,12 @@ open LinuxSem.LinuxProcessSem.Fs
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Fs.Open
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd z_ldiff)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.Checks.Sys.Prelude
 
 /- =========================================================================
    The allocated descriptor is out of the error-encoding window
    ========================================================================= -/
-
-/-- [alloc_fd] never runs past its scan bound: the candidate grows by one
-    per failed lookup and the fuel shrinks by one, so the answer is at
-    most [cand + fuel].
-
-    The bound is stated in `Nat` because that is the form Lean's bitvector
-    arithmetic gives (`toNat` of a sum needs the modulus side condition in
-    `Nat` either way), and [alloc_fd_le] — the only consumer — reads the
-    same bound out of it. -/
-theorem alloc_fd_aux_le (fds : List (word × FdEntry)) (cand : word) (f : Nat)
-    (h : cand.toNat + f < 2 ^ 64) :
-    (alloc_fd_aux fds cand f).toNat ≤ cand.toNat + f := by
-  induction f generalizing cand with
-  | zero => simp [alloc_fd_aux]
-  | succ f ih =>
-    rw [show alloc_fd_aux fds cand (f + 1) =
-        (match fd_lookup fds cand with
-         | none => cand
-         | some _ => alloc_fd_aux fds (cand + 1) f) from rfl]
-    split
-    · omega
-    · have h1 : cand.toNat + 1 < 2 ^ 64 := by omega
-      have hsucc : (cand + 1).toNat = cand.toNat + 1 := by
-        have hone : ((1 : word)).toNat = 1 := by decide
-        rw [BitVec.toNat_add, hone, Nat.mod_eq_of_lt h1]
-      have h2 : (cand + 1).toNat + f < 2 ^ 64 := by rw [hsucc]; omega
-      have h3 := ih (cand + 1) h2
-      rw [hsucc] at h3
-      omega
-
-/-- The advertised bound on a fresh descriptor: at most 4096, far below
-    the error-encoding window (`two_pow_64 - 4096`). -/
-theorem alloc_fd_le (fds : List (word × FdEntry)) : (alloc_fd fds).toNat ≤ 4096 := by
-  unfold alloc_fd
-  have h0 : (BitVec.ofInt 64 0 : word).toNat = 0 := by decide
-  have h1 : (BitVec.ofInt 64 0 : word).toNat + 4096 < 2 ^ 64 := by
-    rw [h0]
-    decide
-  simpa [h0] using alloc_fd_aux_le fds (BitVec.ofInt 64 0) 4096 h1
-
-/-- An allocated fd never matches an injectable errno: it is at most
-    4096, and every errno encodes to a value in the top 4096 words. -/
-theorem alloc_fd_not_error_b (fds : List (word × FdEntry)) :
-    addr_is_error_b (alloc_fd fds) = false := by
-  have h := alloc_fd_le fds
-  unfold addr_is_error_b
-  rw [decide_eq_false_iff_not]
-  unfold two_pow_64
-  omega
-
-/-- In particular an allocated fd never matches an injectable errno. -/
-theorem errno_ret_in_alloc_fd (es : List Int) (fds : List (word × FdEntry))
-    (Hok : errnos_ok es = true) : errno_ret_in es (alloc_fd fds) = false := by
-  apply errno_ret_in_fd es (alloc_fd fds) Hok
-  have h := alloc_fd_le fds
-  have h2 : (4096 : Int) < 2147483648 := by decide
-  show ((alloc_fd fds).toNat : Int) < 2147483648
-  omega
 
 /- =========================================================================
    Per-syscall checkers
@@ -361,17 +303,6 @@ private theorem check_open_result_sound_ok (i : SyscallInput) (eff : SyscallEffe
    [check_open_result] success, and both hand back a model whose `m_vm`
    field is the one they were given.
    ------------------------------------------------------------------------- -/
-
-/-- An accepted [check_ret_only] hands back the model it was
-    given, so it leaves [m_vmmaps] alone.  [check_ret_only_ok_iff] says
-    the same thing; this is the one-projection corollary the frame lemmas
-    below share. -/
-private theorem check_ret_only_frame (eff : SyscallEffect) (r : word)
-    (m m' : Model) (evs : List event)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    m_vmmaps m' = m_vmmaps m := by
-  obtain ⟨-, rfl, -⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rfl
 
 /-- An accepted [check_open_result] builds its model with the
     caller's [mk], so it leaves [m_vmmaps] alone whenever [mk] does.  The
@@ -1598,19 +1529,6 @@ private def completes_ok (i : SyscallInput) (m : Model)
     (spec : SysSpec SyscallEffect) (check : check_result) : Prop :=
   spec i m (.ok eff m' evs) → check = .CheckOk m' evs ∧ eff.eff_copyins = []
 
-/-- Invert one `seqSpec (modifySpec f) (ret_only r)` step.  `inv_ok`
-    deliberately stops at constructor injectivities, so the two shapes the
-    acceptors build are stated once here. -/
-private theorem seqSpec_modify_ret_only_inv (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (modifySpec f) (ret_only r) i m (.ok eff m' evs)) :
-    eff = mkEffect r [] [] ∧ m' = f m ∧ evs = [] := by
-  obtain ⟨u, m2, evs1, evs2, hm, hr, hevs⟩ := H
-  cases hm
-  cases hr
-  simp only [List.nil_append] at hevs
-  exact ⟨rfl, rfl, hevs⟩
-
 /-- The same, for the two-modify chain the three write-create
     acceptors build (`set_fs` then `set_fds`). -/
 private theorem seqSpec_modify2_ret_only_inv (f g : Model → Model) (r : word)
@@ -2234,25 +2152,6 @@ private def completes_unmodeled (i : SyscallInput) (m : Model)
     (spec : SysSpec SyscallEffect) (check : check_result) : Prop :=
   spec i m .unmodeled → check = .CheckUnmodeled
 
-/-- The two acceptor steps never decline. -/
-private theorem modifySpec_never_unmodeled (f : Model → Model) (i : SyscallInput)
-    (m : Model) : ¬ modifySpec f i m .unmodeled := by
-  intro H
-  exact nomatch H
-
-private theorem ret_only_never_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  exact nomatch H
-
-private theorem seqSpec_modify_ret_only_never_unmodeled (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) :
-    ¬ seqSpec (modifySpec f) (ret_only r) i m .unmodeled := by
-  intro H
-  rcases H with h | ⟨u, m2, evs2, h1, h2⟩
-  · exact nomatch h
-  · exact nomatch h2
-
 private theorem seqSpec_modify2_ret_only_never_unmodeled (f g : Model → Model) (r : word)
     (i : SyscallInput) (m : Model) :
     ¬ seqSpec (modifySpec f) (seqSpec (modifySpec g) (ret_only r)) i m .unmodeled := by
@@ -2263,7 +2162,7 @@ private theorem seqSpec_modify2_ret_only_never_unmodeled (f g : Model → Model)
 
 private theorem ret_only_no_unmodeled (r : word) (i : SyscallInput) (m : Model) :
     ¬ ret_only r i m .unmodeled :=
-  ret_only_never_unmodeled r i m
+  ret_only_ne_unmodeled r i m
 
 private theorem open_result_spec_no_unmodeled (m : Model) (mk : word → Model → Model)
     (i : SyscallInput) : ¬ open_result_spec m mk i m .unmodeled := by
@@ -4117,3 +4016,12 @@ theorem check_faccessat2_complete_unmodeled (i : SyscallInput) (dirfd pathp mode
           have hbody := record_copyins_unmodeled_inv _ _ i m h1
           rw [check_faccessat_body_complete_unmodeled i dirfd pathp m (clear_copyins eff) hbody]
           rfl
+
+
+
+
+
+
+
+
+

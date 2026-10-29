@@ -1399,6 +1399,9 @@ theorem check_openat_resolved_rd (p : Fs.path) (flags : word)
              Sys.Fs.Open.open_ignored_flags = (0 : Int)) :
     check_openat_resolved p flags eff m = check_openat_read p eff m := by
   have h0 : ((0 : Int) == (0 : Int)) = true := by decide
+  -- `Hfl` names the alias `Sys.Fs.File.z_ldiff`; the body it must rewrite
+  -- speaks `Sys.Uapi.z_ldiff`, the definition the alias stands for.
+  simp only [Sys.Fs.File.z_ldiff] at Hfl
   unfold check_openat_resolved
   dsimp only
   rw [Hslash, Hfl, h0]
@@ -1415,6 +1418,8 @@ theorem check_openat_resolved_wr_create (p : Fs.path) (flags : word)
     check_openat_resolved p flags eff m = check_openat_create p eff m := by
   have h0 : (Sys.Fs.Open.wr_create_flags == (0 : Int)) = false := by decide
   have h1 : (Sys.Fs.Open.wr_create_flags == Sys.Fs.Open.wr_create_flags) = true := by decide
+  -- as above: unfold the alias named in `Hfl` to the definition the body uses.
+  simp only [Sys.Fs.File.z_ldiff] at Hfl
   unfold check_openat_resolved
   dsimp only
   rw [Hslash, Hfl, h0, h1]
@@ -1832,14 +1837,9 @@ theorem tfo_close (segs : List Segment) (ms : machine_state) (model : Model)
   exact tfo_sys_det_ret_only segs ms model x8 (BitVec.ofInt 64 0)
     (with_fds (fd_remove (m_fds model) (ms_gpr ms 0)) model) U Hsvc Hchk Hh Hlazy Hcont
 
-/-- `BitVec.ofInt 64` round-trips a `word`'s unsigned value — 
-    `Z_to_bv_bv_unsigned`.  (`Uaccess`'s copy is private.) -/
-theorem ofInt_toNat (w : word) : BitVec.ofInt 64 (w.toNat : Int) = w := by
-  refine BitVec.eq_of_toNat_eq ?_
-  rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt]
-  · simp
-  · omega
-  · exact_mod_cast w.isLt
+/- `BitVec.ofInt 64` round-trips a `word`'s unsigned value —
+   `Z_to_bv_bv_unsigned`, the canonical
+   `BvBase.ofInt_toNat`, imported and opened here. -/
 
 /-- A checked-success `if` over a guard: the shape the `FdFile` read and
     the `FdFileW` write arms both end in. -/

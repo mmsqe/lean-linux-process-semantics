@@ -15,7 +15,8 @@
   (mkEffect r [] [])) m []` is spelled the same way here, with the `Nat` of
   `4%nat` inferred from `List (word × Nat)`.
 
-  The spec's prologue is one iff lemma, `bind_inputSpec` (below), plus
+  The spec's prologue is one iff lemma, `bind_inputSpec` — `LinuxProcessSem`'s,
+  reached through the `open` below — plus
   `Monad.bind_getModel`, so the whole step is a `simp only` in both
   directions; `dsimp only` performs the beta reduction after it.
 
@@ -23,7 +24,10 @@
   i.e. FUNCTIONS, so their bodies are `if`s at FUNCTION type.  Lean's
   `whnf` on a goal mentioning one tries to reduce such an `if` — deciding
   `affinity_len_einval_b len` / `sint32 policy < 0` on an opaque word — and
-  recurses without bottoming out (`maximum recursion depth`).
+  does not bottom out there (with the `sint32` spelling of the time it ran
+  into `maximum recursion depth`; with today's `setWidth`/`toInt` spelling
+  it is stuck rather than divergent, which is why the proofs below are still
+  written against an opaque `Q`).
   `by_cases`/`cases` normalise their goal, so each proof `generalize`s its
   conclusion into a local `Q : Prop` first, splits against the (opaque)
   `Q`, and only at a leaf rewrites `Q` back with `rw [← hP]` and
@@ -32,8 +36,10 @@
 -/
 import LinuxSem.Checks.Witness.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Sched.Syscalls
+import LinuxSem.Common.SharedFacts
 
 namespace LinuxSem.Checks.Witness.Kernel.Sched.Syscalls
+open LinuxSem.Common.SharedFacts
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -41,51 +47,15 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Kernel.Sched.Syscalls
 open LinuxSem.Checks.Witness.Prelude
 
-/-- The spec monad's `bind` under an unambiguous name: Lean's root
-    `bind` is `Bind.bind`, so the unqualified name would be ambiguous. -/
-local notation "bind" => LinuxSem.LinuxProcessSem.bind
-
 /-! ## The prologue peel, as one rewrite
 
     `sched_setscheduler_witness_ok` opens the spec's
     `i <- input ;; m <- get_model ;; …` prologue.  Stated as an iff, that
-    step is a `simp only`. -/
+    step is a `simp only`.
 
-private theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-      simp only [LinuxSem.LinuxProcessSem.bind]
-      constructor
-      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
-        simp only [inputSpec, input, Outcome.ok.injEq] at h1
-        obtain ⟨rfl, rfl, rfl⟩ := h1
-        simp only [List.nil_append] at h3
-        subst h3
-        exact h2
-      · intro h
-        exact ⟨i, m, [], evs, rfl, h, by simp⟩
-  | unmodeled =>
-      simp only [LinuxSem.LinuxProcessSem.bind]
-      constructor
-      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
-        · exact absurd h (by simp [inputSpec, input])
-        · simp only [inputSpec, input, Outcome.ok.injEq] at h1
-          obtain ⟨rfl, rfl, rfl⟩ := h1
-          exact h2
-      · intro h
-        exact Or.inr ⟨i, m, [], rfl, h⟩
-
-/-- `record_copyins reads (ret_only r)`: the answer `r`, no writes, and
-    `reads` on the copy-in ledger — which is the exact outcome
-    `sched_setscheduler_witness` reports on its one success arm. -/
-private theorem record_copyins_ret_only_ok (reads : List (word × Nat))
-    (r : word) (i : SyscallInput) (m : Model) :
-    record_copyins reads (ret_only r) i m
-      (.ok (with_copyins reads (mkEffect r [] [])) m []) := by
-  refine ⟨mkEffect r [] [], m, [], [], rfl, ?_, rfl⟩
-  simp [LinuxSem.LinuxProcessSem.pure, with_copyins, List.append_nil]
+    The iff itself is `LinuxSem.LinuxProcessSem.bind_inputSpec`, stated once
+    next to the monad it is about; it reaches this file through the `open
+    LinuxSem.LinuxProcessSem` above. -/
 
 /-! ## sched_getaffinity (123) -/
 
@@ -220,3 +190,4 @@ example (m : Model) : sched_yield_witness m
     = .ok (mkEffect (BitVec.ofInt 64 0) [] []) m [] := rfl
 
 end LinuxSem.Checks.Witness.Kernel.Sched.Syscalls
+

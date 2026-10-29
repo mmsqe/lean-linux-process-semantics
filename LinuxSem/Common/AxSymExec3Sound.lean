@@ -681,7 +681,9 @@ import LinuxSem.Common.SeqExec
 import LinuxSem.Common.StoreOk
 import LinuxSem.Common.SymExec
 import LinuxSem.Common.SymStepR
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
+
 
 namespace LinuxSem.Common.AxSymExec3Sound
 
@@ -695,6 +697,7 @@ open LinuxSem.Common.CatExec
 open LinuxSem.Common.SymStepR
 open LinuxSem.Common.StoreOk
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 
 local instance axsymexec3sound_fx : FPState := fx0
 
@@ -1491,10 +1494,8 @@ theorem lin_of_sound (E : env) (e : expr) : eqm (lden E (lin_of e)) (uE E e) := 
   | EExt sx lo n a iha => exact lin_of_triv E _
   | EBlob sx k i n => exact lin_of_triv E _
 
-theorem ofInt_toNat (w : word) : BitVec.ofInt 64 (w.toNat : Int) = w := by
-  rw [BitVec.ofInt_natCast]
-  apply BitVec.eq_of_toNat_eq
-  rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt w.isLt]
+/- `ofInt_toNat` (the `BitVec.ofInt 64` round trip of an unsigned value) is
+   `BvBase.ofInt_toNat`, imported and opened here. -/
 
 theorem unlin_ladd (E : env) (a b : expr) :
     edenot E (unlin (ladd (lin_of a) (lin_of b))) = alu64 .ADD (edenot E a) (edenot E b) := by
@@ -1719,10 +1720,9 @@ theorem mem_denot_cons (E : env) (base : word → Option byte) (a : saddr) (w : 
       = wbytes (mem_denot E base rest) (adenot E a)
           (word_to_le_bytes w (edenot E v)) := rfl
 
-/-- A literal in range reads back as itself. -/
-theorem u_small {z : Int} (Hz : 0 ≤ z ∧ z < 2 ^ 64) : bv_unsigned (Z_to_bv 64 z) = z := by
-  rw [u_lit64a]
-  exact Int.emod_eq_of_lt Hz.1 Hz.2
+/- `u_small` — "a literal in range reads back as itself" — is no longer declared
+   here: it is `LinuxSem.Common.RocqSpelling.u_small`, which this file imports
+   and opens above, and it states exactly the same thing. -/
 
 /-- A flat address denotes exactly its Z-address. -/
 theorem flat_u (E : env) (a : saddr) (n : Int) (H : flat E a n) :
@@ -3654,16 +3654,6 @@ theorem two_pow_half (n : Nat) (hn : 1 ≤ n) :
   rw [hn1, Nat.pow_succ, Nat.mul_comm, Int.natCast_mul]
   rfl
 
-/-- `bv_swrap_small`: a value below the half modulus is fixed (at the
-    bound `1 <= n`, the same `bv_swrap`-at-`0` deviation as `extz_0`). -/
-theorem bv_swrap_small (n : Nat) (hn : 1 ≤ n) (z : Int)
-    (h : 0 ≤ z ∧ z < ((2 ^ (n - 1) : Nat) : Int)) : bv_swrap n z = z := by
-  unfold bv_swrap
-  rw [two_pow_half n hn,
-    Int.emod_eq_of_lt (by have := natCast_two_pow_pos (n - 1); omega)
-      (by have := natCast_two_pow_pos (n - 1); omega)]
-  omega
-
 /-- `a mod b <= a` for `a >= 0`, `b > 0` (`Z.mod_le`). -/
 theorem emod_le_self (a : Int) (b : Int) (h : 0 ≤ a) (hb : 0 < b) : a % b ≤ a := by
   have hq : 0 ≤ a / b := Int.ediv_nonneg h (Int.le_of_lt hb)
@@ -4425,35 +4415,6 @@ theorem lor_ge_r (x y : Int) (Hy : 0 ≤ y) (Hy64 : y < 2 ^ 64) :
   exact Int.ofNat_le.mpr Nat.right_le_or
 
 /-!  Bit INDICES are `Nat` ; `2^j` at `Int` level is `zpow 2 j` in this tree. -/
-
-/-- `testbit_mask`: the bits of the high mask `2^64 - 2^j` are
-    exactly the positions `j <= i < 64`. -/
-theorem testbit_mask_nat (j i : Nat) (hj : j ≤ 64) :
-    Nat.testBit (2 ^ 64 - 2 ^ j) i = (decide (j ≤ i) && decide (i < 64)) := by
-  have h2 : 2 ^ j * 2 ^ (64 - j) = 2 ^ 64 := by
-    rw [← Nat.pow_add]
-    congr 1
-    omega
-  have hm : 2 ^ 64 - 2 ^ j = 2 ^ j * (2 ^ (64 - j) - 1) := by
-    rw [Nat.mul_sub_left_distrib, Nat.mul_one, h2]
-  rw [hm, Nat.testBit_two_pow_mul, Nat.testBit_two_pow_sub_one]
-  by_cases hji : j ≤ i
-  · have hd : decide (i - j < 64 - j) = decide (i < 64) := by
-      rcases Nat.lt_or_ge i 64 with h | h
-      · simp [h, show i - j < 64 - j from by omega]
-      · simp [h, show ¬ (i - j < 64 - j) from by omega]
-    simp [hji, hd]
-  · simp [hji]
-
-/-- `testbit_drop_low`: bits at or above `j` do not see the low
-    part `r < 2^j`. -/
-theorem testbit_drop_low (q r j i : Nat) (hr : r < 2 ^ j) (hji : j ≤ i) :
-    Nat.testBit (q * 2 ^ j + r) i = Nat.testBit (q * 2 ^ j) i := by
-  have hsum : q * 2 ^ j + r = 2 ^ j * q + r := by rw [Nat.mul_comm q (2 ^ j)]
-  have hmul : q * 2 ^ j = 2 ^ j * q := by rw [Nat.mul_comm q (2 ^ j)]
-  rw [hsum, hmul, Nat.testBit_two_pow_mul_add (a := q) (b := r) (i := j) hr i,
-    ite_eq_right (by omega), Nat.testBit_two_pow_mul]
-  simp [hji]
 
 /-- `land_highmask`, `Nat` half: masking with `2^64 - 2^j` clears
     the low `j` bits, i.e. rounds `x` down to a multiple of `2^j`. -/
@@ -20194,17 +20155,9 @@ theorem prune_zf_sound (segs : List Segment) (mk : saddr → expr → kentry)
     `Nat.mod_mod_of_dvd`, the shifted tail with the `Nat` division identity
     `(m % (A * 256)) / 256 = (m / 256) % A` (`div_256_mod` below). -/
 
-/-- The low byte of a `Nat`, as `Z_to_le_bytes` encodes it. -/
-theorem toNat_ofInt_8_nat (m : Nat) : (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
-  rw [BitVec.toNat_ofInt]
-  rw [Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
-  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
-  simp
-
-/-- `(m : Int) >>> 8` at a `Nat` argument is the `Nat` quotient `m / 256`. -/
-theorem int_shiftRight_8_natCast (m : Nat) :
-    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
-  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
+/- The low byte of a `Nat` as `Z_to_le_bytes` encodes it, and the `>>> 8`
+   quotient, are the canonical `BvBase.toNat_ofInt_8_nat` and
+   `BvBase.int_shiftRight_8_natCast`, imported and opened here. -/
 
 /-- The little-endian shift of a byte modulus: taking the low `A * 256` bits
     and then dropping the low byte is the quotient by `256`, reduced mod
@@ -20959,3 +20912,11 @@ theorem carry_sound (segs : List Segment) (E : env) (anybase : word → Option b
     · exact prune_sound segs E anybase (mem_denot E base older) (facts_of kn1)
         (mem_denot E base older) a w v kn1 hs1 kn2 scs2 hs2 hc2
         (facts_of_ok segs E (mem_denot E base older) kn1 hkn1) hw8 hfa hkn1 hs2d K' hK'
+
+
+
+
+
+
+
+

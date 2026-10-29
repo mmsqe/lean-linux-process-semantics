@@ -54,18 +54,19 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
   (rw_bytes_max modeled_rw_count access_ok_zero)
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff lowest_fd)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite (UIO_FASTIOV)
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket
 open LinuxSem.Checks.Sys.Prelude
 open LinuxSem.Checks.Sys.Uaccess (check_access_ok_zero)
 
-/-- The syscall layer's 32-bit argument truncation.  `Sys.Uapi` carries a
-    staging copy of the same function, so the bare name is ambiguous once
-    both namespaces are open; the checkers must use the one the specs use,
-    so this binds it to `Syscall`'s. -/
-private abbrev abi_low32 (w : word) : word :=
-  LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32 w
+/- The syscall layer's 32-bit argument truncation.  `Sys.Uapi` carries a
+   staging alias of the same function, so the bare name is ambiguous once
+   both namespaces are open; the checkers must use the one the specs use, so
+   the `local notation` below binds it to `Syscall`'s.  It declares nothing —
+   unlike the `private abbrev` it replaces — and expands to the canonical
+   name, so the terms below are `Syscall`'s. -/
+local notation "abi_low32" => LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32
 
 /- =========================================================================
    The fresh-descriptor acceptor
@@ -595,16 +596,6 @@ def check_recv_fd_answer (fds : List (word × FdEntry)) (fd : word)
    projection of a structure update is the old projection by `rfl`.
    ------------------------------------------------------------------------- -/
 
-/-- An accepted [check_ret_only] hands back the model it was
-    given, so it leaves [m_vmmaps] alone.  The one-projection corollary of
-    `check_ret_only_ok_iff`. -/
-private theorem net_ret_only_frame (eff : SyscallEffect) (r : word)
-    (m m' : Model) (evs : List event)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    m_vmmaps m' = m_vmmaps m := by
-  obtain ⟨-, rfl, -⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rfl
-
 /-- The same for the copy-in ledger wrapper — accepted, it
     hands back the model it was given. -/
 private theorem net_ret_only_copyins_frame (reads : List (word × Nat))
@@ -671,7 +662,7 @@ theorem check_recv_fd_answer_frame (fds : List (word × FdEntry)) (fd : word)
   generalize hsl : sockfd_lookup_errno fds fd = o at H
   cases o with
   | none => exact nomatch H
-  | some e => exact net_ret_only_frame eff (errno_ret e) m m' evs H
+  | some e => exact check_ret_only_frame eff (errno_ret e) m m' evs H
 
 /-- socketpair's answer once the 8-byte destination is known writable:
     either a reservation errno with `usockvec` untouched, or the two
@@ -754,7 +745,7 @@ def check_recvmsg (fd flags : word) (eff : SyscallEffect) (m : Model)
    deliberately instead of relying on `subst`'s variable choice.
    ========================================================================= -/
 
-private theorem choose_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
+theorem choose_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
     (e : Int) (m1 : Model) (evs1 : List event)
     (H : errno_from es i m (.ok e m1 evs1)) :
     e ∈ es ∧ m1 = m ∧ evs1 = [] := by
@@ -764,7 +755,7 @@ private theorem choose_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
   obtain ⟨rfl, rfl, rfl⟩ := hok
   exact ⟨hx, rfl, rfl⟩
 
-private theorem ret_only_ok_inv (r : word) (i : SyscallInput) (m : Model)
+theorem ret_only_ok_inv (r : word) (i : SyscallInput) (m : Model)
     (eff : SyscallEffect) (m' : Model) (evs : List event)
     (H : ret_only r i m (.ok eff m' evs)) :
     eff = mkEffect r [] [] ∧ m' = m ∧ evs = [] := by
@@ -782,7 +773,7 @@ private theorem set_fds_ok_inv (fds : List (word × FdEntry)) (i : SyscallInput)
 
 /-- The introduction form of `ret_only` at its own word — `pure_ok`
     applied through the abbreviation, which `pure_ok` cannot see. -/
-private theorem ret_only_ok (r : word) (i : SyscallInput) (m : Model) :
+theorem ret_only_ok (r : word) (i : SyscallInput) (m : Model) :
     ret_only r i m (.ok (mkEffect r [] []) m []) := by
   unfold ret_only LinuxSem.LinuxProcessSem.pure
   rfl
@@ -937,82 +928,11 @@ theorem check_errno_or_success_complete_unmodeled (es : List Int)
     check_errno_or_success es fds r eff m = .CheckUnmodeled := by
   exact absurd H (errno_or_success_no_unmodeled es fds r i m)
 
-/- =========================================================================
-   The arm correspondences and the fresh-descriptor bound
-
-   `Checks/Sys/Fs/Open.lean` carries `alloc_fd_aux_le`, `alloc_fd_le`,
-   `alloc_fd_not_error_b` and `errno_ret_in_alloc_fd`, and the `socket`
-   proofs need the last of them.  That file is not in this module's import
-   cone — pulling it in here would drag the whole `Fs` checker tree into
-   this arm — so the four are restated here verbatim; they can go with the
-   `check_new_fd_result` copy above if that import edge is ever taken.
-   ========================================================================= -/
-
-theorem alloc_fd_aux_le (fds : List (word × FdEntry)) (cand : word) (f : Nat)
-    (h : cand.toNat + f < 2 ^ 64) :
-    (alloc_fd_aux fds cand f).toNat ≤ cand.toNat + f := by
-  induction f generalizing cand with
-  | zero => simp [alloc_fd_aux]
-  | succ f ih =>
-    rw [show alloc_fd_aux fds cand (f + 1) =
-        (match fd_lookup fds cand with
-         | none => cand
-         | some _ => alloc_fd_aux fds (cand + 1) f) from rfl]
-    split
-    · omega
-    · have h1 : cand.toNat + 1 < 2 ^ 64 := by omega
-      have hsucc : (cand + 1).toNat = cand.toNat + 1 := by
-        have hone : ((1 : word)).toNat = 1 := by decide
-        rw [BitVec.toNat_add, hone, Nat.mod_eq_of_lt h1]
-      have h2 : (cand + 1).toNat + f < 2 ^ 64 := by rw [hsucc]; omega
-      have h3 := ih (cand + 1) h2
-      rw [hsucc] at h3
-      omega
-
-theorem alloc_fd_le (fds : List (word × FdEntry)) : (alloc_fd fds).toNat ≤ 4096 := by
-  unfold alloc_fd
-  have h0 : (BitVec.ofInt 64 0 : word).toNat = 0 := by decide
-  have h1 : (BitVec.ofInt 64 0 : word).toNat + 4096 < 2 ^ 64 := by
-    rw [h0]
-    decide
-  simpa [h0] using alloc_fd_aux_le fds (BitVec.ofInt 64 0) 4096 h1
-
-theorem alloc_fd_not_error_b (fds : List (word × FdEntry)) :
-    addr_is_error_b (alloc_fd fds) = false := by
-  have h := alloc_fd_le fds
-  unfold addr_is_error_b
-  rw [decide_eq_false_iff_not]
-  unfold two_pow_64
-  omega
-
-theorem errno_ret_in_alloc_fd (es : List Int) (fds : List (word × FdEntry))
-    (Hok : errnos_ok es = true) : errno_ret_in es (alloc_fd fds) = false := by
-  apply errno_ret_in_fd es (alloc_fd fds) Hok
-  have h := alloc_fd_le fds
-  have h2 : (4096 : Int) < 2147483648 := by decide
-  show ((alloc_fd fds).toNat : Int) < 2147483648
-  omega
-
-/-- Checker → spec, for one arm answering through `check_ret_only`: an
-    accepted `check_ret_only` *is* the spec's `ret_only` at that word,
-    with the claimed model and events. -/
-private theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨heff, hm, hevs⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rw [heff, hm, hevs]
-  exact ret_only_ok r i m
-
-/-- Spec → checker, for one arm: an outcome of the spec's `ret_only` at
-    that word is accepted by `check_ret_only` at the same word. -/
-private theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨heff, hm, hevs⟩ := ret_only_ok_inv r i m eff m' evs H
-  rw [heff, hm, hevs]
-  simp [check_ret_only, bv_eqb_refl]
+/- The checker ↔ spec bridge for one arm answering through `check_ret_only`
+   is the canonical `arm_ok` (checker → spec) / `arm_check_ok` (spec →
+   checker) pair of `LinuxSem.Checks.Sys.Prelude`, opened above: an accepted
+   `check_ret_only` *is* the spec's `ret_only` at that word, with the claimed
+   model and events. -/
 
 /-- Checker → spec, for one arm that answers after installing a new fd
     table: `check_ret_only` at the narrowed model *is* the spec's
@@ -1040,14 +960,6 @@ private theorem arm_set_fds_check_ok (fds : List (word × FdEntry)) (r : word)
   rw [hevs1, List.nil_append, hevs2] at heq
   rw [heff, hm', heq]
   simp [check_ret_only, bv_eqb_refl]
-
-/-- `ret_only` — hence `err_ret` — never declines: `pure` has one outcome
-    shape. -/
-private theorem ret_only_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  exact nomatch H
 
 /- =========================================================================
    listen
@@ -2065,7 +1977,7 @@ theorem check_socketpair_complete_unmodeled (i : SyscallInput)
 
 /-- `record_copyins` propagates a declining body: it only wraps the `ok`
     shape. -/
-private theorem record_copyins_unmodeled_intro (reads : List (word × Nat))
+theorem record_copyins_unmodeled_intro (reads : List (word × Nat))
     (spec : SysSpec SyscallEffect) (i : SyscallInput) (m : Model)
     (H : spec i m .unmodeled) :
     record_copyins reads spec i m .unmodeled := by
@@ -2229,7 +2141,7 @@ private theorem check_copyins_same (reads : List (word × Nat))
 /-- Checker → spec, for one arm that answers after recording a ledger:
     `check_ret_only_copyins` at `r` *is* the spec's `record_copyins` of
     `ret_only r` at the same word. -/
-private theorem arm_copyins_ok (reads : List (word × Nat)) (r : word)
+theorem arm_copyins_ok (reads : List (word × Nat)) (r : word)
     (eff : SyscallEffect) (m m' : Model) (evs : List event) (i : SyscallInput)
     (H : check_ret_only_copyins reads eff r m [] = .CheckOk m' evs) :
     record_copyins reads (ret_only r) i m (.ok eff m' evs) := by
@@ -2239,7 +2151,7 @@ private theorem arm_copyins_ok (reads : List (word × Nat)) (r : word)
   exact record_copyins_clear_ok reads (ret_only r) i m _ m [] rfl (ret_only_ok r i m)
 
 /-- Spec → checker for the same arm. -/
-private theorem arm_copyins_check_ok (reads : List (word × Nat)) (r : word)
+theorem arm_copyins_check_ok (reads : List (word × Nat)) (r : word)
     (eff : SyscallEffect) (m m' : Model) (evs : List event) (i : SyscallInput)
     (H : record_copyins reads (ret_only r) i m (.ok eff m' evs)) :
     check_ret_only_copyins reads eff r m [] = .CheckOk m' evs := by
@@ -2260,7 +2172,7 @@ private theorem arm_copyins_check_ok (reads : List (word × Nat)) (r : word)
    `mk` at that fd, the effect carries no payload, and the ledger is empty.
    ========================================================================= -/
 
-private theorem lowest_fd_arm_inv (fds : List (word × FdEntry))
+theorem lowest_fd_arm_inv (fds : List (word × FdEntry))
     (mk : word → Model → Model)
     (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model)
     (evs : List event)
@@ -2289,7 +2201,7 @@ private theorem lowest_fd_arm_inv (fds : List (word × FdEntry))
   subst hnfd
   exact ⟨hlookup, heff0, hm'0, heq⟩
 
-private theorem lowest_fd_arm (fds : List (word × FdEntry))
+theorem lowest_fd_arm (fds : List (word × FdEntry))
     (mk : word → Model → Model) (i : SyscallInput) (m : Model)
     (hfr : fd_lookup fds (alloc_fd fds) = none) :
     bind (lowest_fd fds)
@@ -2307,7 +2219,7 @@ private theorem lowest_fd_arm (fds : List (word × FdEntry))
     · exact modify_ok _ i m
     · exact pure_ok _ i _
 
-private theorem lowest_fd_arm_ne_unmodeled (fds : List (word × FdEntry))
+theorem lowest_fd_arm_ne_unmodeled (fds : List (word × FdEntry))
     (mk : word → Model → Model) (i : SyscallInput) (m : Model) :
     ¬ bind (lowest_fd fds)
         (fun nfd => seqSpec (modifySpec (mk nfd)) (ret_only nfd)) i m .unmodeled := by
@@ -2324,17 +2236,6 @@ private theorem lowest_fd_arm_ne_unmodeled (fds : List (word × FdEntry))
     · unfold ret_only LinuxSem.LinuxProcessSem.pure at Hk2
       simp at Hk2
 
-
-private theorem errno_arm_ne_unmodeled (es : List Int) (i : SyscallInput) (m : Model) :
-    ¬ bind (errno_from es) (fun e => err_ret e) i m .unmodeled := by
-  intro H
-  unfold LinuxSem.LinuxProcessSem.bind at H
-  rcases H with Hc | ⟨e, m1, evs1, Hc, Hret⟩
-  · unfold errno_from choose at Hc
-    obtain ⟨x, hx, hok⟩ := Hc
-    simp at hok
-  · unfold err_ret ret_only LinuxSem.LinuxProcessSem.pure at Hret
-    exact nomatch Hret
 
 
 /- =========================================================================
@@ -2980,3 +2881,19 @@ theorem check_bind_complete_unmodeled (i : SyscallInput) (fd addrp addrlen : wor
                             simp only [hrx] at hbody ⊢
                         | SkReset peer chan => rfl
         | _ => exact absurd hbody (ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

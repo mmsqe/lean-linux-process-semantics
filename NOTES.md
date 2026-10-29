@@ -732,6 +732,17 @@ term carries more than ~2 nested `if`-rewrites over a large hypothesis. Or give
 `check_bind` / `check_connect`'s socket arm a named `def` in `Socket.lean` (a
 semantic no-op) so its frame's hypothesis is one compact application.
 
+**Addendum: `sint32` was respelled, so the rows that name it are historical.**
+`sint32` is now `(w.setWidth 32).toInt` (`LinuxProcessSem/Sys/Syscall.lean`):
+the kernel reduces it at a literal (`sint32 2 = 2` and
+`sint32 (BitVec.ofInt 64 (-1)) = -1` are `rfl`), and on an opaque word it is
+**stuck rather than divergent**.  What remains of the wall is the `Int`
+comparison on a cast with the old shape (`nfds_signed`, `lazy_interior`), and
+the finding above — it tracks the size of the hypothesis times the number of
+nested `if`-rewrites, not the guard shape — is about that shape.  A `sint32`
+note in a source file that still says "cannot be unfolded" is describing the
+old spelling; the current one needs no such workaround.
+
 ### ### 5.30 The FOURTH wall: kernel deep recursion from chained `ite_eq_left`
 
 `clock_gettime` and `nanosleep` could not use (see NOTES)'s `cases h : <guard> = true` +
@@ -919,11 +930,18 @@ two, and `rfl` is what closes it (`Common/PropExec`, `Common/MmapSim`).
 **5. The KERNEL's recursion budget now follows `maxRecDepth`.**  v4.31 said
 "(kernel) deep recursion detected"; v4.35 appends "use `set_option maxRecDepth
 <num>` to increase the limit", and it is true: `Common/AsanPlacement`'s `omega`
-proofs over `(w.toNat : Int)` sums are *finite* but deeper than the default
-1000, so `set_option maxRecDepth 4096` admits them (1024 is the first value that
+proofs over `(w.toNat : Int)` sums are *finite* but deeper than the default,
+so `set_option maxRecDepth 4096` admits them (1024 is the first value that
 works; 4096 is headroom).  On a *divergent* term the same option only buys a
 slower failure — the two are not interchangeable, which is why item 1 had to be
 fixed at the definition.
+
+**The default is 512, not 1000.**  `Init/Prelude.lean` defines
+`defaultMaxRecDepth := 512` and `Lean/Util/RecDepth.lean` registers the option
+with it; the `1000` in `Lean/CoreM.lean` is only the `Core.Context` fallback.
+This matters when reading "one level over the budget" numbers: `(kernel) deep
+recursion` at the default means *the 513th level*, not the 1001st.  (Measured
+on v4.35 during the `lazy_interior` check below.)
 
 **6. The `if_*` family is renamed.**  `if_pos` → `ite_eq_left`, `if_neg` →
 `ite_eq_right`, `if_true` → `ite_true`, `if_false` → `ite_false`.  The old names
@@ -932,3 +950,44 @@ use in the tree now takes the new spelling (10,503 occurrences over 168 files),
 and the sections above are written that way too.  The build is warning-free
 besides: 28 Prop-valued `def`s became `theorem`s (`linter.defProp`), 7 unused
 `simp` arguments removed, and one binder that only `omega` reads renamed `_Hz`.
+
+### ### 5.33 The `Int`-comparison wall, re-measured after the `nfds_signed` fix
+
+The `sint32`/`narrow` shape of §5.30–5.32 was the last definition that made the
+kernel diverge (`let v : Int := (x.toNat : Int); if v < 2^31 then …`).  Lean
+4.35's default budget being 512 (item 5 above), two suspects were probed
+directly, with `lake env lean` on closed goals:
+
+- `StateVm.lazy_interior` (an `Int`-valued page computation) is **finite**:
+  `rfl` on `m_vm_lazy (vm_add_lazy a n m) = lazy_interior a n ++ m_vm_lazy m`
+  reports `(kernel) deep recursion` at the default and closes at
+  `maxRecDepth 514` in 0.32 s.  The trigger is the definition, not the
+  surrounding `++`/`if`: the same goal with a variable list closes at the
+  default.  The tree's existing `unfold vm_add_lazy; rw
+  [m_vm_lazy_with_vm_backing]` avoids it entirely (0.23 s).  A `Nat`-first
+  respelling closes by `rfl` at the default, but it would re-spell the
+  arithmetic every lemma about it rewrites with — so keep the `Int` body and
+  keep using the `unfold; rw` route.  A literal page-present instance needs
+  depth ≈ 32768 under `rfl`; that is why its example uses `decide`.
+- `Sys.Syscall.nfds_signed` was the one genuinely **divergent** shape left: a
+  projection that forces it (`structure BoxI …`, `rfl`) fails at the default,
+  at 65536, and still at 10⁶ (5.5 s).  It is now `(n32.setWidth 32).toInt`,
+  which closes at the default; no reachable caller can tell the difference
+  (the dispatcher narrows with `nfds32` first, so `toNat < 2^32` always).  The
+  two spellings diverge only for `n32 ≥ 2^32` with bit 31 set in the low half.
+
+The rest of the scan is **stuck, not divergent**, and needs no change: the
+`z_ldiff`-gate terms in `Sys/Net/Socket.lean` (`tu`, `fl`) and their checkers,
+`Sched.affinity_len_einval_b`, `sock_level_known`/`shut_how_ok`,
+`Fs.ReadWrite.lseek_dest`, and `Checks.RiscvAccessReporting.access_data` all
+close by `rfl` when boxed behind a projection at the default budget.  The
+5,676 inline `(x.toNat : Int)` comparisons against an `Int` *variable* are the
+same shape.
+
+**The §5.30–5.32 rule needs one qualification.**  "The wall tracks (size of
+`H`) × (nested `if`-rewrites)" describes the `rw [ite_eq_left]` motive depth,
+not these definitions: both goals above have no hypothesis and no rewrite, and
+the cost is a property of the definition alone.  Two shapes, two rules:
+`Int` arithmetic inside a definition is a *depth* cost (raise the budget or
+unfold-then-rewrite, or respell the definition); a `rw` through a deep motive
+is the *H*-sized cost the sections above measure.

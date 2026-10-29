@@ -164,9 +164,10 @@
   identification).  `Z.eqb _ 0` is `_ == 0`, and `negb` is `!`.
 
   `Z.ldiff`.  The bit-difference `a & ~b`; Lean has no
-  such constant and `Sys/Uapi.lean` ports only `Z.lor`/`Z.land`, so
-  `Fs.File.z_ldiff` — defined beside its first caller, `dup3_flags_ok` —
-  is imported and reused rather than copied a second time.  Every operand
+  such constant, and `Sys/Uapi.lean` ports `Z.lor`, `Z.land` and `Z.ldiff`
+  together, so `Sys.Uapi.z_ldiff` is imported and reused rather than
+  copied a second time (`Fs.File.z_ldiff` is a transparent alias to it).
+  Every operand
   here is non-negative (`flags.toNat` is, `TFD_CREATE_FLAGS` is a
   literal), which is the condition under which `a - (a & b)` is `a & ~b`;
   its docstring carries that argument.
@@ -190,6 +191,7 @@ open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Fs.File
+  (lowest_fd lowest_fd_ok lowest_fd_occupied)
 
 namespace LinuxSem.LinuxProcessSem.Sys.Fs.Timerfd
 
@@ -253,7 +255,7 @@ def timerfd_create_spec (clkid flags : word) : SysSpec SyscallEffect :=
 
 /-! ### The gate -/
 
-/-- The residue test is `Z.ldiff` (`a & ~b`), imported from `Fs.File`:
+/-- The residue test is `Z.ldiff` (`a & ~b`), `Sys.Uapi.z_ldiff`:
     it clears exactly the mask's bits. -/
 example : z_ldiff TFD_CREATE_FLAGS TFD_CREATE_FLAGS = 0 := by decide
 example : z_ldiff (TFD_CREATE_FLAGS + 1) TFD_CREATE_FLAGS = 1 := by decide
@@ -434,7 +436,7 @@ private def demoFds : List (word × FdEntry) :=
     empty file system, EOF on stdin, no halt and the default
     RLIMIT_NOFILE (1024). -/
 private def demoModel : Model :=
-  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The same table with fd 1 closed — after `close(1)` the next
     descriptor handed out is 1 again, not 3. -/
@@ -442,7 +444,7 @@ private def demoHoleFds : List (word × FdEntry) :=
   [(0, FdEntry.FdChannel 7), (2, FdEntry.FdChannel 9)]
 
 private def demoHoleModel : Model :=
-  mkModel demoHoleFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel demoHoleFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The allocator hands out the first free descriptor — 3 here. -/
 example : alloc_fd demoFds = 3 := by decide
@@ -489,20 +491,9 @@ example : alloc_fd_aux demoSixFds (BitVec.ofInt 64 0) 5 = 5 := by decide
 example : fd_lookup demoSixFds 5 = some (FdEntry.FdChannel 12) := by
   simp [demoSixFds, fd_lookup]
 
-/-- THE -EMFILE ALTERNATIVE, stated rather than evaluated: when the
-    allocator's answer is already taken — the 4096-candidate scan
-    exhausted — `lowest_fd` has no success outcome at all, so the only
-    answer left is the errno arm's, and `get_unused_fd_flags` carries
-    -EMFILE as its only one.  This is `File.lowest_fd_occupied`, cited
-    rather than reproved; the Timerfd arm declines the whole path, so the
-    errno must not appear here. -/
-theorem lowest_fd_at_limit (fds : List (word × FdEntry)) (i : SyscallInput)
-    (m : Model) (o : Outcome word Model event)
-    (h : fd_lookup fds (alloc_fd fds) ≠ none) : ¬ lowest_fd fds i m o :=
-  lowest_fd_occupied fds i m o h
-
 /-- The two errno words this file's prose names. -/
 example : EINVAL = 22 := by decide
 example : EMFILE = 24 := by decide
 
 end LinuxSem.LinuxProcessSem.Sys.Fs.Timerfd
+

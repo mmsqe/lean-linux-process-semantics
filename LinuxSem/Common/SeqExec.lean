@@ -1063,15 +1063,10 @@ variable [fx : FPState]
 
 /- value simplification -/
 
-/-- [bv_unsigned (Z_to_bv n z)] for an in-range [z]. -/
-theorem toNat_ofInt_small {n : Nat} {z : Int} (h0 : 0 ≤ z)
-    (h1 : z < ((2 ^ n : Nat) : Int)) : ((BitVec.ofInt n z).toNat : Int) = z := by
-  rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt h0 h1, Int.toNat_of_nonneg h0]
-
 theorem v_divu_small (x y : word) (Hy : 0 < (y.toNat : Int)) :
     ((v_divu x y).toNat : Int) = (x.toNat : Int) / (y.toNat : Int) := by
   unfold v_divu
-  refine toNat_ofInt_small
+  refine toNat_ofInt_eq_self
     (Int.ediv_nonneg (Int.natCast_nonneg _) (Int.le_of_lt Hy)) ?_
   rw [Int.natCast_pow]
   exact Int.lt_of_le_of_lt (Int.ediv_le_self _ (Int.natCast_nonneg _)) (u64_range x).2
@@ -1079,7 +1074,7 @@ theorem v_divu_small (x y : word) (Hy : 0 < (y.toNat : Int)) :
 theorem v_remu_small (x y : word) (Hy : 0 < (y.toNat : Int)) :
     ((v_remu x y).toNat : Int) = (x.toNat : Int) % (y.toNat : Int) := by
   unfold v_remu
-  refine toNat_ofInt_small (Int.emod_nonneg _ (Int.ne_of_gt Hy)) ?_
+  refine toNat_ofInt_eq_self (Int.emod_nonneg _ (Int.ne_of_gt Hy)) ?_
   rw [Int.natCast_pow]
   exact Int.lt_of_lt_of_le (Int.emod_lt_of_pos _ Hy) (Int.le_of_lt (u64_range y).2)
 
@@ -1382,3 +1377,17 @@ example : v_addi (BitVec.ofInt 64 100) (- (16 : Int)) = BitVec.ofInt 64 84 := by
 example : v_addiw (BitVec.ofInt 64 41) 0 = BitVec.ofInt 64 41 := by decide
 
 end Sanity
+
+theorem find_segment_In (segs : List Segment) (a n : Int) (seg : Segment)
+    (H : find_segment segs a n = some seg) : seg ∈ segs := by
+  induction segs with
+  | nil => simp only [find_segment] at H; exact absurd H (by simp)
+  | cons s0 rest ih =>
+      simp only [find_segment] at H
+      split at H
+      · rename_i hc
+        injection H with hseg
+        subst hseg
+        exact List.mem_cons_self
+      · exact List.mem_cons_of_mem _ (ih H)
+

@@ -10,8 +10,8 @@
   `Sys` module, without running a binary.
 
   Spelling.  Statements keep their names, and the few spellings Lean does
-  not have are supplied as local transparent `abbrev`s below,
-  DEFINITIONALLY EQUAL to what they stand for:
+  not have come from `LinuxSem.Common.RocqSpelling`, transparent
+  `abbrev`s DEFINITIONALLY EQUAL to what they stand for:
   - `bv_unsigned w` is `(w.toNat : Int)` and `Z_to_bv n z` is
     `BitVec.ofInt n z`;
   - `zeqb`/`zleb`/`zltb` are `Z.eqb`/`Z.leb`/`Z.ltb` on `Int`.
@@ -40,6 +40,7 @@ import LinuxSem.Checks.Cases.Kernel.Sys
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Groups
 import LinuxSem.Checks.Sys.Kernel.Groups
 import LinuxSem.LinuxProcessSem.StateLedger
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -63,26 +64,10 @@ open LinuxSem.Checks.Cases.Kernel.Sys
 
 namespace LinuxSem.Checks.Cases.Kernel.Groups
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
+/-! Rocq spellings (`bv_unsigned`, `Z_to_bv`, `zeqb`/`zleb`/`zltb`) come from
+    `LinuxSem.Common.RocqSpelling`, opened above. -/
 
 /-! * LinuxProcessSem.Checks.Cases.Kernel.Groups — worked examples over getgroups (158) and setgroups (159)
 

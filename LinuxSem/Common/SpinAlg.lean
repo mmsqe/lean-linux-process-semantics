@@ -101,6 +101,7 @@ import LinuxSem.Common.SimInv
 import LinuxSem.Common.LazyFrame
 import LinuxSem.Common.ShapeAlg
 import LinuxSem.EquivalenceDefinition.Equivalence
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
@@ -129,6 +130,7 @@ local instance spin_fx : LinuxSem.Common.PropExec.FPState :=
   LinuxSem.Common.PropExec.fx0
 
 namespace LinuxSem.Common.SpinAlg
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 /- =========================================================================
    The relation: [ShapeAlg.realizes] plus the spin leaf

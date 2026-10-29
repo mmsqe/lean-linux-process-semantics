@@ -30,10 +30,12 @@
     and keep their bare names.
 
   Proofs.  `rfl` — kernel reduction of a closed goal — closes a concrete
-  example here, but not the directory arm's own first test: that one
-  reads `sint32` at a concrete word, which the kernel cannot reduce (see
-  the note above the examples).  So this file uses the two routes the
-  socket examples (`Checks.Cases.Net.Socket`) also use:
+  example here, but not the directory arm's own first test on the shape
+  the next note measures: that one reads `sint32` at a concrete word, and
+  while `sint32` had the `narrow` body the kernel could not reduce it.
+  `sint32` is now `(w.setWidth 32).toInt`, which does reduce at a literal,
+  but the examples below keep the two routes the socket examples
+  (`Checks.Cases.Net.Socket`) also use:
 
   (A) the CONSTRUCTOR projection `isUnmodeledR` from
       `Checks.Cases.CheckToolkit` — `by decide` a `Bool`, reflect it
@@ -62,6 +64,7 @@ import LinuxSem.Checks.Sys.Fs.Readdir
 import LinuxSem.LinuxProcessSem.Sys.Fs.Readdir
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
 import LinuxSem.LinuxProcessSem.Sys.Syscall
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -85,49 +88,9 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Fs.Readdir
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed`: the signed value of a bitvector, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
-
-/-- `in_mem` as a function (a `SyscallInput` field projection). -/
-abbrev in_mem (i : SyscallInput) : word → Option byte := i.in_mem
-/-- `in_wmem` as a function. -/
-abbrev in_wmem (i : SyscallInput) : word → Option byte := i.in_wmem
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
-/-- `eff_writes` as a function. -/
-abbrev eff_writes (e : SyscallEffect) : List (word × List byte) := e.eff_writes
-/-- `eff_zeros` as a function. -/
-abbrev eff_zeros (e : SyscallEffect) : List (word × word) := e.eff_zeros
-/-- `eff_unmaps` as a function. -/
-abbrev eff_unmaps (e : SyscallEffect) : List (word × word) := e.eff_unmaps
-/-- `eff_copies` as a function. -/
-abbrev eff_copies (e : SyscallEffect) : List MemCopy := e.eff_copies
-/-- `eff_copyins` as a function. -/
-abbrev eff_copyins (e : SyscallEffect) : List (word × Nat) := e.eff_copyins
+/-! The Rocq spellings used below (`bv_unsigned`, `Z_to_bv`, …) are the shared transparent aliases of `LinuxSem.Common.RocqSpelling`. -/
 
 /-! * LinuxSem.Checks.Cases.Fs.Readdir — worked examples over getdents64 (61)
 
@@ -152,7 +115,7 @@ def getdents64_model : Model :=
     [ (0, FdEntry.FdChannel 0), (1, FdEntry.FdChannel 1), (2, FdEntry.FdChannel 2),
       (3, FdEntry.FdFile [102] 7), (4, FdEntry.FdFileW [103] 9), (5, FdEntry.FdDir) ]
     (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120]), ([103], [121])] none none none
+    [([102], [120]), ([103], [121])]
 
 /-! One getdents64 call, with [buf] parked at a mapped-looking address
     that no arm below reads: the spec does not take the pointer, so
@@ -234,16 +197,23 @@ macro "getdents64_other" "(" fd:term ")" "(" entry:term ")" : tactic =>
 
 /-! ### The `rfl` wall, MEASURED, and how it was passed
 
-    The `rfl` wall, MEASURED, and how it was passed.  The
+    MEASURED AGAINST THE EARLIER `sint32`.  `Sys.Syscall.sint32` is now
+    `(w.setWidth 32).toInt`, which the kernel does reduce at a literal, so
+    the wall recorded here no longer stands in front of it; the numbers
+    are the record for the `narrow` shape, which `Sys.Syscall.nfds_signed`
+    still has.  They are kept because they are why these examples are
+    staged rather than `rfl`-closed.
+
+    The
     directory arm's first test is `if getdents64_no_room count`, i.e.
     `decide (Sys.Syscall.sint32 count < Readdir.dirent64_min_reclen)`, and
-    closing THAT by `rfl` asks the kernel to reduce `sint32` at a concrete
+    closing THAT by `rfl` asked the kernel to reduce `sint32` at a concrete
     word.  Measured, on this toolchain: at `maxRecDepth 1000000` the
     elaborator reports "maximum recursion depth has been reached", and at
     20 000 000 the kernel stack overflows.  `decide` closes the individual
     facts — `getdents64_no_room (23 : word) = true`,
     `getdents64_ctx_count (23 : word) = 23` and `sint32 (23 : word) = 23`
-    are each provable that way — so the obstruction is the definitional
+    are each provable that way — so the obstruction was the definitional
     check `rfl` performs, not the arithmetic.  The same hazard is on
     record in `LinuxSem/Checks/Sys/Fs/Readdir.lean`, and
     `Checks/Witness/Fs/Readdir.lean` works around it by rewriting the `if`

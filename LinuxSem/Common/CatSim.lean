@@ -536,14 +536,6 @@ theorem write1_no_unmodeled (segs : List Segment) (ms : machine_state) (x8 : wor
    Prefix helpers.
    ========================================================================= -/
 
-theorem is_prefix_app_mono {A : Type} (l a b : List A) (H : is_prefix a b) :
-    is_prefix (l ++ a) (l ++ b) := by
-  induction l with
-  | nil => exact H
-  | cons x xs ih =>
-    simp only [List.cons_append]
-    exact ⟨rfl, ih⟩
-
 /- =========================================================================
    Delivery choices.  A run's complete write trace is one `WriteEv ch` per
    delivered byte, where the environment picks, for EACH buffer, a nonempty
@@ -1549,3 +1541,6 @@ example : wpick (BitVec.ofInt 64 1) [[BitVec.ofInt 8 65]]
 end Sanity
 
 end LinuxSem.Common.CatSim
+
+
+

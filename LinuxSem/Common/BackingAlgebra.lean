@@ -62,6 +62,7 @@ open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Mm.Mmap
 open LinuxSem.LinuxProcessSem.Sys.Mm.Mprotect
+open LinuxSem.LinuxProcessSem.Sys.Mm.Mremap
 
 namespace LinuxSem.Common.BackingAlgebra
 
@@ -226,25 +227,6 @@ theorem fg_lit (z : Int) (hz : 0 ≤ z ∧ z < 2 ^ 64) :
 /- -------------------------------------------------------------------------
    live_bytes as a count
    ------------------------------------------------------------------------- -/
-
-theorem live_bytes_app (l1 l2 : List (word × word)) :
-    live_bytes (l1 ++ l2) = live_bytes l1 + live_bytes l2 := by
-  induction l1 with
-  | nil => simp [live_bytes]
-  | cons hd tl ih =>
-      obtain ⟨a, s⟩ := hd
-      simp only [List.cons_append, live_bytes]
-      rw [ih]
-      omega
-
-theorem maps_subtract_app (l1 l2 : List (word × word)) (lo hi : Int) :
-    maps_subtract (l1 ++ l2) lo hi
-      = maps_subtract l1 lo hi ++ maps_subtract l2 lo hi := by
-  induction l1 with
-  | nil => rfl
-  | cons hd tl ih =>
-      obtain ⟨a, sz⟩ := hd
-      simp only [List.cons_append, maps_subtract, ih, List.append_assoc]
 
 theorem maps_subtract_all_app :
     ∀ (C l1 l2 : List (word × word)),
@@ -911,12 +893,18 @@ theorem live_msa :
 @[simp] theorem m_vm_lazy_vm_add_lazy (a n : word) (m : Model) :
     m_vm_lazy (vm_add_lazy a n m) = lazy_interior a n ++ m_vm_lazy m := by
   /- Via `m_vm_lazy_with_vm_backing`, not by `rfl` on the whole term: the
-     kernel's `whnf` has to push the projection through
-     `with_vm_backing`, meet the `++` that `lazy_interior` sits under, and
-     start reducing `List.append` -- which forces the `if` inside
-     `lazy_interior` and so the `Int` comparison behind it, the wall
-     `Checks/Cases`' `sint32` note measures.  `unfold` + `rw` stops at
-     the projection. -/
+     kernel's `whnf` has to push the projection through `with_vm_backing`,
+     meet the `++` that `lazy_interior` sits under, and reduce into
+     `lazy_interior`'s `Int` page arithmetic.  MEASURED on v4.35: that costs
+     exactly one kernel recursion level MORE than the default budget — `rfl`
+     on this goal reports "(kernel) deep recursion" at `maxRecDepth` 512 and
+     closes at 514 (0.32 s) — so it is a finite depth cost, not the
+     divergence the old `sint32` spelling had (`nfds_signed` was the last
+     definition with that shape and has since been respelled).  `unfold` +
+     `rw` stops at the projection and closes in 0.23 s, which is why the
+     proof uses it; a `Nat`-first respelling of `lazy_interior` would also
+     close by `rfl` at the default, but it would re-spell the arithmetic
+     every proof about it rewrites with. -/
   unfold vm_add_lazy
   rw [m_vm_lazy_with_vm_backing]
 
@@ -1114,12 +1102,9 @@ theorem backing_mprotect_le (m : Model) (h' : VmMaps) (lo hi : Int)
 
 
 
-/-- A `word` is the `ofInt` of its own unsigned value (the `Z_to_bv` round
-    trip the remnant arithmetic needs). -/
-theorem ofInt_toNat (w : word) : BitVec.ofInt 64 ((w.toNat : Int)) = w := by
-  rw [BitVec.ofInt_natCast]
-  apply BitVec.eq_of_toNat_eq
-  simp
+/- A `word` is the `ofInt` of its own unsigned value (the `Z_to_bv` round
+   trip the remnant arithmetic needs) — the canonical
+   `BvBase.ofInt_toNat`, imported and opened here. -/
 
 /-- `lazy_interior` of a page-aligned, page-rounded, nonempty range is the
     range itself. -/
@@ -1484,3 +1469,6 @@ example : iv_wf ((BitVec.ofInt 64 8), (BitVec.ofInt 64 4)) := by
 example : overlap_sum [(BitVec.ofInt 64 0, BitVec.ofInt 64 8)] 2 4 = 2 := by decide
 
 end LinuxSem.Common.BackingAlgebra
+
+
+

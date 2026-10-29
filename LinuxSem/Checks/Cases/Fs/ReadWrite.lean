@@ -46,6 +46,7 @@ import LinuxSem.Checks.Sys.Fs.ReadWrite.Vec
 import LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite
 import LinuxSem.LinuxProcessSem.Sys.Uaccess
 import LinuxSem.LinuxProcessSem.Sys.Syscall
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -71,49 +72,9 @@ open LinuxSem.Checks.Cases.Prelude
 
 namespace LinuxSem.Checks.Cases.Fs.ReadWrite
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each of these is a transparent alias, so it
-    changes no statement's meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `bv_signed`: the signed value of a bitvector, as an `Int`. -/
-abbrev bv_signed {n : Nat} (w : BitVec n) : Int := w.toInt
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
-abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
-
-/-- `in_mem` as a function (a `SyscallInput` field projection). -/
-abbrev in_mem (i : SyscallInput) : word → Option byte := i.in_mem
-/-- `in_wmem` as a function. -/
-abbrev in_wmem (i : SyscallInput) : word → Option byte := i.in_wmem
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
-/-- `eff_writes` as a function. -/
-abbrev eff_writes (e : SyscallEffect) : List (word × List byte) := e.eff_writes
-/-- `eff_zeros` as a function. -/
-abbrev eff_zeros (e : SyscallEffect) : List (word × word) := e.eff_zeros
-/-- `eff_unmaps` as a function. -/
-abbrev eff_unmaps (e : SyscallEffect) : List (word × word) := e.eff_unmaps
-/-- `eff_copies` as a function. -/
-abbrev eff_copies (e : SyscallEffect) : List MemCopy := e.eff_copies
-/-- `eff_copyins` as a function. -/
-abbrev eff_copyins (e : SyscallEffect) : List (word × Nat) := e.eff_copyins
+/-! The Rocq spellings used below (`bv_unsigned`, `Z_to_bv`, …) are the shared transparent aliases of `LinuxSem.Common.RocqSpelling`. -/
 
 
 
@@ -293,7 +254,7 @@ theorem write_count_bound_declines_on_every_file_kind :
   let unmod r := (match r with | check_result.CheckUnmodeled => true | _ => false ) ;
   let model_of (k : path → word → FdEntry) : Model :=
     mkModel [(3, k [102] (Z_to_bv 64 0))] (mkVmMaps [] [] 0 0 demo_limit) IEof
-      [([102], [104, 105])] none none none ;
+      [([102], [104, 105])] ;
   let call_at b n k := check_syscall
         (SyscallInput.mkInput 64 [3, b, n, 0, 0, 0]
            (fun a => if bv_eqb a b then some 122 else none)
@@ -361,7 +322,7 @@ theorem write_range_boundary_pins_the_three_file_kinds :
   let small := Z_to_bv 64 8 ;
   let model_of (k : path → word → FdEntry) : Model :=
     mkModel [(3, k [102] (Z_to_bv 64 0))] (mkVmMaps [] [] 0 0 demo_limit) IEof
-      [([102], [104, 105])] none none none ;
+      [([102], [104, 105])] ;
   let call k := check_syscall
         (SyscallInput.mkInput 64 [3, near_top, small, 0, 0, 0]
            (fun a => if bv_eqb a near_top then some 122 else none)
@@ -417,7 +378,7 @@ theorem writev_aggregate_past_the_retired_bound_is_judged_by_every_file_kind :
         (SyscallInput.mkInput 66 [3, 8192, 1, 0, 0, 0] mem (fun _ => none))
         (mkEffect 1 [] [])
         (mkModel [(3, e)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-           [([102], [104, 105])] none none none) ;
+           [([102], [104, 105])]) ;
   unmod (call (FdEntry.FdFileW [102] (Z_to_bv 64 0))) = false
   ∧ unmod (call (FdEntry.FdFileRW [102] (Z_to_bv 64 0))) = false
   ∧ unmod (call (FdEntry.FdFileA [102] (Z_to_bv 64 0))) = false
@@ -433,7 +394,7 @@ theorem writev_aggregate_past_the_retired_bound_is_judged_by_every_file_kind :
     produced. -/
 theorem rdwr_fd_refuses_ebadf_in_either_direction :
   let m := mkModel [(3, FdEntry.FdFileRW [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-             [([102], [104, 105])] none none none ;
+             [([102], [104, 105])] ;
   check_syscall (SyscallInput.mkInput 63 [3, 4096, 1, 0, 0, 0] (fun _ => none)
                    (fun a => if bv_eqb a 4096 then some 0 else none))
     (mkEffect (errno_ret EBADF) [] []) m = check_result.CheckReject
@@ -451,7 +412,7 @@ theorem rdwr_fd_refuses_ebadf_in_either_direction :
     file below is "hi" with the second byte overwritten. -/
 theorem rdwr_read_then_write_shares_one_offset :
   let m := mkModel [(3, FdEntry.FdFileRW [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-             [([102], [104, 105])] none none none ;
+             [([102], [104, 105])] ;
   (match check_syscall (SyscallInput.mkInput 63 [3, 4096, 1, 0, 0, 0] (fun _ => none)
                          (fun a => if bv_eqb a 4096 then some 0 else none))
           (mkEffect 1 [(4096, [104])] []) m with
@@ -545,11 +506,11 @@ theorem write_zero_len_within_file_is_a_noop :
 
 def apast_model : Model :=
   mkModel [(3, FdEntry.FdFileA [102] 4)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [104, 105])] none none none
+    [([102], [104, 105])]
 
 def azero_model : Model :=
   mkModel [(3, FdEntry.FdFileA [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [104, 105])] none none none
+    [([102], [104, 105])]
 
 /-! AN APPEND WRITE DOES NOT READ [f_pos], stated as an equality between
     two whole checker answers rather than as two separate runs.  A real
@@ -633,7 +594,7 @@ theorem append_zero_write_leaves_the_offset_alone :
     them.  Both directions are pinned here instead. -/
 def append_llong_max_model : Model :=
   mkModel [(3, FdEntry.FdFileA [102] (Z_to_bv 64 (2 ^ 63 - 1)))]
-    (mkVmMaps [] [] 0 0 demo_limit) IEof [([102], [104, 105])] none none none
+    (mkVmMaps [] [] 0 0 demo_limit) IEof [([102], [104, 105])]
 
 theorem append_write_at_llong_max_is_einval :
   check_syscall (SyscallInput.mkInput 64 [3, 4096, 1, 0, 0, 0]
@@ -858,7 +819,7 @@ theorem writev_import_range_fault_beats_the_gather :
     file and offset are untouched. -/
 def writev_llong_max_model : Model :=
   mkModel [(3, FdEntry.FdFileW [102] (Z_to_bv 64 (2 ^ 63 - 1)))]
-    (mkVmMaps [] [] 0 0 demo_limit) IEof [([102], [])] none none none
+    (mkVmMaps [] [] 0 0 demo_limit) IEof [([102], [])]
 
 theorem writev_at_llong_max_is_einval :
   check_syscall (SyscallInput.mkInput 66 [3, 8192, 2, 0, 0, 0] mem_writev_ab (fun _ => none))
@@ -999,7 +960,7 @@ def wmem_readv_one : word → Option byte :=
 
 def readv_huge_file_model : Model :=
   mkModel [(3, FdEntry.FdFile [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [120])] none none none
+    [([102], [120])]
 
 theorem readv_huge_len_delivers_one_byte_without_unary_expansion :
   check_syscall
@@ -1044,7 +1005,7 @@ def mem_readv_eight_zero : word → Option byte :=
 
 def readv_write_only_model : Model :=
   mkModel [(3, FdEntry.FdFileW [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [])] none none none
+    [([102], [])]
 
 theorem readv_heap_iovec_boundary_fails_closed :
   check_syscall
@@ -1189,10 +1150,10 @@ theorem readv_write_only_fd_is_ebadf_before_import :
 /-! A file "abcde" on fd 3 at offset [off], and a directory on fd 3. -/
 def readv_abcde_model (off : word) : Model :=
   mkModel [(3, FdEntry.FdFile [102] off)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [97, 98, 99, 100, 101])] none none none
+    [([102], [97, 98, 99, 100, 101])]
 
 def readv_dir_model : Model :=
-  mkModel [(3, FdEntry.FdDir)] (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none
+  mkModel [(3, FdEntry.FdDir)] (mkVmMaps [] [] 0 0 demo_limit) IEof []
 
 /-! A ZERO-LENGTH ENTRY, THEN A BAD BASE, on a regular file.  The
     zero-length entry is skipped and the first delivered byte lands at
@@ -1397,7 +1358,7 @@ theorem partial_destination_on_a_pipe_declines :
 
 def lseek_model : Model :=
   mkModel [(0, FdEntry.FdChannel 0), (3, FdEntry.FdFile [102] 0)] (mkVmMaps [] [] 0 0 demo_limit) IEof
-    [([102], [104, 105])] none none none
+    [([102], [104, 105])]
 
 /-! Channels are unseekable streams: -ESPIPE. -/
 
@@ -1714,7 +1675,7 @@ def pipe_queued_model : Model :=
   with_pipes [(0, ([97, 98], 2))]
     (mkModel [(0, FdEntry.FdChannel 0), (1, FdEntry.FdChannel 1), (2, FdEntry.FdChannel 2),
               (3, FdEntry.FdPipe 0 false), (4, FdEntry.FdPipe 0 true)]
-       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [])
 
 /-! A pipe [read] one byte over [Uaccess.rw_bytes_max] is JUDGED, and
     delivers the whole queue: [State.pipe_take] takes the minimum

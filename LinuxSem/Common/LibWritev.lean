@@ -136,6 +136,7 @@ import LinuxSem.LinuxProcessSem.Fs
 import LinuxSem.LinuxProcessSem.Run
 import LinuxSem.Common.PropExec
 import LinuxSem.Checks.ExecutableSpecs
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
@@ -165,8 +166,10 @@ local instance libwritev_fx : LinuxSem.Common.PropExec.FPState :=
     `mkst`/`getr`/`regupd`/`v_addi`/`step_ecall` in.  The memory layer
     (`seg_rom`, `rdn`) is this file's own copy, in PREREQUISITES (B), so it
     is deliberately NOT opened here. -/
-open LinuxSem.Common.PropExec (mkst getr regupd v_addi step_ecall
+open LinuxSem.Common.PropExec (mkst getr regupd v_addi step_ecall le_word_v
   arg_reg_0 arg_reg_1 arg_reg_2 getr_nz)
+open LinuxSem.LinuxProcessSem.Sys.Uapi (mod_mul_256_of mod_mul_256)
+open LinuxSem.Common.SharedFacts
 
 /-! =========================================================================
     PREREQUISITES (A) — the shape algebra, `Common/ShapeAlg`
@@ -177,26 +180,6 @@ open LinuxSem.Common.PropExec (mkst getr regupd v_addi step_ecall
     lands. -/
 
 /-! ## Prefix lemmas (`Common/ShapeAlg`, `Common/CatSim`) -/
-
-theorem is_prefix_app_r {A : Type} (l m a : List A)
-    (H : is_prefix a l) : is_prefix a (l ++ m) := by
-  induction l generalizing a with
-  | nil =>
-    cases a with
-    | nil => exact is_prefix_nil _
-    | cons _ _ => exact False.elim H
-  | cons x l ih =>
-    cases a with
-    | nil => exact is_prefix_nil _
-    | cons y a =>
-      obtain ⟨rfl, H'⟩ := H
-      exact ⟨rfl, ih a H'⟩
-
-theorem is_prefix_app_mono {A : Type} (l a b : List A)
-    (H : is_prefix a b) : is_prefix (l ++ a) (l ++ b) := by
-  induction l with
-  | nil => exact H
-  | cons x l ih => exact ⟨rfl, ih⟩
 
 theorem is_prefix_app_split {A : Type} (l a b : List A)
     (H : is_prefix b (l ++ a)) :
@@ -408,57 +391,9 @@ theorem access_okb_of_le (b : word) (n : Int)
    used to have no counterpart in `BvBase.lean`; it now does (proved at
    the bottom of that file from the `Nat` byte recursion), so the reason
    for keeping the 8-byte instance here is no longer absence: `LibWritev`
-   needs it over `bytes_le_to_Nat`, and the same three `private` helpers
-   `Sys/Uapi.lean`'s `struct stat` block carries, at the same statements,
-   are what the local proof consumes. -/
-
-/-- Splitting one byte off the front of a little-endian read: the byte is the
-    low eight bits and the rest is shifted up by eight. -/
-private theorem bytes_le_to_Nat_cons (b : byte) (rest : List byte) :
-    bytes_le_to_Nat (b :: rest) = bytes_le_to_Nat rest * 256 + b.toNat := by
-  have hb : b.toNat < 2 ^ 8 := b.isLt
-  simp only [bytes_le_to_Nat]
-  rw [Nat.or_comm, ← Nat.shiftLeft_add_eq_or_of_lt (i := 8) hb]
-  simp [Nat.shiftLeft_eq]
-
-/-- One limb of the modulus arithmetic below. -/
-private theorem mod_mul_256_of (q r M : Nat) (hr : r < 256) (hM : 0 < M) :
-    (256 * q + r) % (256 * M) = 256 * (q % M) + r := by
-  have hqM : q % M < M := Nat.mod_lt _ hM
-  have hrM : r < 256 * M := by omega
-  rw [Nat.add_mod, Nat.mul_mod_mul_left, Nat.mod_eq_of_lt hrM, Nat.mod_eq_of_lt (by omega)]
-
-/-- `Z_to_le_bytes`'s shift, at a `Nat`-valued argument. -/
-private theorem int_shiftRight_8_natCast (m : Nat) :
-    ((m : Int) >>> 8) = ((m / 256 : Nat) : Int) := by
-  rw [Int.shiftRight_eq_div_pow, ← Int.ofNat_ediv_ofNat]
-
-/-- The low byte of a `Nat`, as `Z_to_le_bytes` encodes it. -/
-private theorem toNat_ofInt_8_nat (m : Nat) :
-    (BitVec.ofInt 8 (m : Int)).toNat = m % 256 := by
-  rw [BitVec.toNat_ofInt, Int.toNat_emod (Int.natCast_nonneg m) (by decide)]
-  rw [show ((2 ^ 8 : Nat) : Int) = (256 : Int) by decide]
-  simp
-
-private theorem mod_mul_256 (x M : Nat) (hM : 0 < M) :
-    x % (256 * M) = 256 * ((x / 256) % M) + x % 256 := by
-  have h := mod_mul_256_of (x / 256) (x % 256) M (Nat.mod_lt _ (by decide)) hM
-  rwa [Nat.div_add_mod] at h
-
-/-- The round trip: reading back `k` little-endian bytes of `m` gives `m`
-    truncated to `8k` bits. -/
-theorem bytes_le_to_Nat_Z_to_le_bytes (k m : Nat) :
-    bytes_le_to_Nat (Z_to_le_bytes k (m : Int)) = m % 2 ^ (8 * k) := by
-  induction k generalizing m with
-  | zero => simp [Z_to_le_bytes, bytes_le_to_Nat, Nat.mod_one]
-  | succ k ih =>
-    rw [Z_to_le_bytes, int_shiftRight_8_natCast m]
-    rw [bytes_le_to_Nat_cons, ih (m / 256), toNat_ofInt_8_nat]
-    have hM : 0 < 2 ^ (8 * k) := Nat.two_pow_pos _
-    rw [show 8 * (k + 1) = 8 * k + 8 by omega, Nat.pow_add]
-    rw [Nat.mul_comm (2 ^ (8 * k)) (2 ^ 8)]
-    rw [show 2 ^ 8 = 256 by decide, mod_mul_256 m (2 ^ (8 * k)) hM]
-    omega
+   needs it over `bytes_le_to_Nat`, the form its `read_u64` decoding
+   consumes, and `BvBase` states that `Nat` round trip once
+   (`bytes_le_to_Nat_Z_to_le_bytes`) for every caller. -/
 
 /-- `PropExec.bytes_le_to_Z_8`: the 8 little-endian bytes of `v`
     read back as `v`'s unsigned value — what turns the byte list a `read_u64`
@@ -468,14 +403,6 @@ theorem bytes_le_to_Z_8 (v : word) :
   unfold bytes_le_to_Z word_to_le_bytes
   rw [bytes_le_to_Nat_Z_to_le_bytes]
   rw [show 8 * 8 = 64 by decide, Nat.mod_eq_of_lt v.isLt]
-
-/-- `PropExec.le_word_v`: a byte list whose little-endian value is a
-    word's unsigned value decodes back to that word. -/
-theorem le_word_v (bs : List byte) (v : word)
-    (Hv : bytes_le_to_Z bs = (v.toNat : Int)) :
-    le_bytes_to_word bs = v := by
-  unfold le_bytes_to_word
-  rw [Hv, u64_roundtrip']
 
 /-! ## `Nat`/`Int` count kit (`Common/PropExec`) -/
 
@@ -1025,6 +952,18 @@ def halt_ev (m' : Model) (code : word) : event :=
   | some sig => .KillEv sig (m_fs m')
   | none => .ExitEv code (m_fs m')
 
+/-- The forward direction every node uses: an admissible, non-halting
+    checker answer into a model without lazy mappings is an `sstep`. -/
+theorem sstep_of_check (segs : List Segment) (ms : machine_state) (model : Model)
+    (x8 : word) (eff : SyscallEffect) (m' : Model) (evs : List event)
+    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = some x8)
+    (Hc : check_syscall (sys_input segs ms x8) eff model = .CheckOk m' evs)
+    (Hh' : m_halted m' = none) (Hlazy : m_vm_lazy m' = []) :
+    sstep segs (mkCfg ms model) evs
+      (.SNext (mkCfg (advance_past_svc (apply_effect ms eff)) m')) := by
+  refine .syscall ms model x8 eff m' m' evs Hh Hsvc ((check_syscall_ok_iff _ _ _ _ _).mp Hc) Hh' ?_
+  rw [materialize_model_accesses_no_lazy m' (syscall_effect_accesses eff) Hlazy]
+
 /-- Inversion of one transition at a pending syscall, phrased through the
     checker.  Three `CheckOk` sub-cases: the ordinary step (into the
     MATERIALIZED post-model), the materialization fault, the exit. -/
@@ -1080,18 +1019,6 @@ theorem sstep_svc_inv (segs : List Segment) (ms : machine_state) (model : Model)
       obtain rfl := Option.some.inj p5
       exact Or.inr ⟨mkEffect (BitVec.ofInt 64 0) [] [], (check_syscall_err_iff _ _ _).mpr hspec,
         rfl, rfl⟩
-
-/-- The forward direction every node uses: an admissible, non-halting
-    checker answer into a model without lazy mappings is an `sstep`. -/
-theorem sstep_of_check (segs : List Segment) (ms : machine_state) (model : Model)
-    (x8 : word) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = some x8)
-    (Hc : check_syscall (sys_input segs ms x8) eff model = .CheckOk m' evs)
-    (Hh' : m_halted m' = none) (Hlazy : m_vm_lazy m' = []) :
-    sstep segs (mkCfg ms model) evs
-      (.SNext (mkCfg (advance_past_svc (apply_effect ms eff)) m')) := by
-  refine .syscall ms model x8 eff m' m' evs Hh Hsvc ((check_syscall_ok_iff _ _ _ _ _).mp Hc) Hh' ?_
-  rw [materialize_model_accesses_no_lazy m' (syscall_effect_accesses eff) Hlazy]
 
 /-! =========================================================================
     `check_syscall` at sysno 66 is `check_writev`
@@ -1736,3 +1663,14 @@ end WithSegsPending
     the callers' sake.) -/
 
 end LinuxSem.Common.LibWritev
+
+
+
+
+
+
+
+
+
+
+

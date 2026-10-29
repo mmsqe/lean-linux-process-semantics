@@ -35,7 +35,6 @@ open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
-open LinuxSem.LinuxProcessSem.Sys.Fs.File
 open LinuxSem.LinuxProcessSem.Sys.Fs.Timerfd
 open LinuxSem.Checks.Witness.Prelude
 
@@ -104,7 +103,7 @@ theorem timerfd_create_witness_ok (clkid flags : word) (i : SyscallInput)
     empty file system, EOF on stdin, no halt.  `timerfd_create_witness`
     reads none of it. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A STRAY FLAG BIT IS -EINVAL, whatever the clock id — here the alarm
     clock, so the answer is the gate's -EINVAL and never the -EPERM of

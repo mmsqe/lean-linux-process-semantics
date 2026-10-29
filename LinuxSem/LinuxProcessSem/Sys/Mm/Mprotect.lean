@@ -496,12 +496,12 @@ private def demoProtectedVm : VmMaps :=
 /-- The model the arm checks run in: that ledger, no lazy reservation and
     no materialized page. -/
 private def demoModel : Model :=
-  mkModel [] demoProtectedVm IEof [] none none none
+  mkModel [] demoProtectedVm IEof []
 
 /-- The same model with the budget spent, so the exposure's post-state does
     not fit `vm_limit`: the budget mark's charging case. -/
 private def demoBrokeModel : Model :=
-  mkModel [] { demoProtectedVm with vm_limit := 0 } IEof [] none none none
+  mkModel [] { demoProtectedVm with vm_limit := 0 } IEof []
 
 /-- A syscall input for `mprotect` (226).  The spec reads none of it; it is
     here because a `SysSpec` is a relation on an input as well as a model. -/

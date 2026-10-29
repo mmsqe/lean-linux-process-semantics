@@ -1624,7 +1624,7 @@ private def check_input_at (mem : word → Option byte) : SyscallInput :=
     file system and an empty launch mask (`procst_sigmask` is 0), which
     is the state `rt_sigprocmask` reads as `old_set`. -/
 private def check_model : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The literal 0: a NULL `act`, `oact`, `uss`, `uoss`, `nset` or
     `oset`, depending on the arm. -/

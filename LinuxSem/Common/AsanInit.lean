@@ -83,6 +83,7 @@ import LinuxSem.Common.AsanAcctShape
 import LinuxSem.Common.AsanPlacement
 import LinuxSem.Common.BackingAlgebra
 import LinuxSem.Common.AsanCeil
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
 import LinuxSem.Common.AxSymExec3Sound
 import LinuxSem.Common.AxSymRun3
@@ -116,6 +117,7 @@ open LinuxSem.Common.AsanPlanCore
 open LinuxSem.Common.AsanPlan
 open LinuxSem.Common.AsanPlanSound
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3Sound
 open LinuxSem.Common.AxSymRun3
 open LinuxSem.Common.RefLayout

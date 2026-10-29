@@ -399,15 +399,9 @@ theorem bv_and_255_range (a : word) :
     exact Nat.and_lt_two_pow a.toNat (y := 255) (n := 8) (by decide)
   exact ⟨Int.natCast_nonneg _, by omega⟩
 
-/-- `Z_to_bv_bv_unsigned`: `BitVec.ofInt 64` round-trips a `word`'s
-    unsigned value.  The same round trip `Sys.Uaccess` uses privately. -/
-private theorem ofInt_toNat (w : word) : BitVec.ofInt 64 (w.toNat : Int) = w := by
-  refine BitVec.eq_of_toNat_eq ?_
-  rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt]
-  · simp
-  · exact Int.natCast_nonneg _
-  · have := w.isLt
-    omega
+/- `Z_to_bv_bv_unsigned`: `BitVec.ofInt 64` round-trips a `word`'s unsigned
+   value — the canonical `BvBase.ofInt_toNat`, imported and
+   opened here. -/
 
 /-- THE COVERAGE CLAIM.  Every value [State.m_halted] can ever hold is in
     [byte_codes], so [AnyExit] below is not merely a wide set: it is the

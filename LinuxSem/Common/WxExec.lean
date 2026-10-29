@@ -107,18 +107,6 @@ local instance wsexec_fx : FPState := PropExec.fx0
    find_segment inversion
    ========================================================================= -/
 
-theorem find_segment_in (segs : List Segment) (a n : Int) (seg : Segment)
-    (H : find_segment segs a n = some seg) : seg ∈ segs := by
-  induction segs generalizing seg with
-  | nil => simp [find_segment] at H
-  | cons s rest ih =>
-    simp only [find_segment] at H
-    split at H
-    · simp only [Option.some.injEq] at H
-      subst H
-      simp
-    · exact List.mem_cons_of_mem s (ih seg H)
-
 theorem find_segment_range (segs : List Segment) (a n : Int) (seg : Segment)
     (H : find_segment segs a n = some seg) :
     (seg.seg_base : Int) ≤ a ∧ a + n ≤ (seg.seg_base : Int) + (seg.seg_size : Int) := by
@@ -152,7 +140,7 @@ theorem code_read_none_no_ro_exec (segs : List Segment) (a : word) (n : Nat)
   | none => rfl
   | some seg =>
     simp only []
-    have hin : seg ∈ segs := find_segment_in segs (a.toNat : Int) (n : Int) seg hfs
+    have hin : seg ∈ segs := find_segment_In segs (a.toNat : Int) (n : Int) seg hfs
     have hro := (List.all_eq_true.mp Hro) seg hin
     cases hg : (seg_executable seg && !seg_writable seg) with
     | false => simp [hg]
@@ -210,11 +198,6 @@ theorem mem_clear_wbytes (m : word → Option byte) (addr : word) (bs : List byt
     side conditions of [mem_clear_wbytes]). -/
 theorem length_Z_to_le_bytes (n : Nat) (z : Int) : (Z_to_le_bytes n z).length = n :=
   LinuxSem.LinuxProcessSem.length_Z_to_le_bytes n z
-
-theorem length_word_to_le_bytes (n : Nat) (v : word) :
-    (word_to_le_bytes n v).length = n := by
-  unfold word_to_le_bytes
-  exact length_Z_to_le_bytes n (v.toNat : Int)
 
 /- =========================================================================
    The fetch bridge: overlay-aware fetch = static fetch under clear
@@ -653,3 +636,5 @@ theorem step_sb_at_wx (segs : List Segment) (regs : BvMap word) (pc : word)
     rw [Ha]; exact Hok
   rw [step_sb_val_wx segs regs pc mem rom w rs1 rs2 imm Hwx Hecall Hdecode hok]
   simp only [Ha, Hv, word_to_le_bytes, Z_to_le_bytes, Hb]
+
+

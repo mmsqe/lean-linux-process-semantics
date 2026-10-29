@@ -118,73 +118,6 @@ def check_dup3 (oldfd newfd flags : word) (eff : SyscallEffect)
    existentials and disjunctions that `inv_ok` deliberately does not
    touch.  They are named after what they say and are used once each. -/
 
-/-- `alloc_fd` never runs past its scan bound: the candidate grows by one
-    per failed lookup and the fuel shrinks by one, so the answer is at
-    most `cand + fuel`.  (The `Nat` cast keeps the bound inside 64 bits,
-    which is what the arithmetic below needs.) -/
-theorem alloc_fd_aux_le (fds : List (word × FdEntry)) (cand : word) (f : Nat)
-    (h : cand.toNat + f < 2 ^ 64) :
-    (alloc_fd_aux fds cand f).toNat ≤ cand.toNat + f := by
-  induction f generalizing cand with
-  | zero => simp [alloc_fd_aux]
-  | succ f ih =>
-    rw [show alloc_fd_aux fds cand (f + 1) =
-        (match fd_lookup fds cand with
-         | none => cand
-         | some _ => alloc_fd_aux fds (cand + 1) f) from rfl]
-    split
-    · omega
-    · have h1 : cand.toNat + 1 < 2 ^ 64 := by omega
-      have hsucc : (cand + 1).toNat = cand.toNat + 1 := by
-        have hone : ((1 : word)).toNat = 1 := by decide
-        rw [BitVec.toNat_add, hone, Nat.mod_eq_of_lt h1]
-      have h2 : (cand + 1).toNat + f < 2 ^ 64 := by rw [hsucc]; omega
-      have h3 := ih (cand + 1) h2
-      rw [hsucc] at h3
-      omega
-
-/-- The advertised bound on a fresh descriptor: at most 4096, far below
-    the error-encoding window (`two_pow_64 - 4096`). -/
-theorem alloc_fd_le (fds : List (word × FdEntry)) : (alloc_fd fds).toNat ≤ 4096 := by
-  unfold alloc_fd
-  have h0 : (BitVec.ofInt 64 0 : word).toNat = 0 := by decide
-  have h1 : (BitVec.ofInt 64 0 : word).toNat + 4096 < 2 ^ 64 := by
-    rw [h0]
-    decide
-  simpa [h0] using alloc_fd_aux_le fds (BitVec.ofInt 64 0) 4096 h1
-
-/-- In particular an allocated fd never matches an injectable errno
-    ([Prelude.errno_ret_in_fd] plus the bound above). -/
-theorem errno_ret_in_alloc_fd (es : List Int) (fds : List (word × FdEntry))
-    (Hok : errnos_ok es = true) : errno_ret_in es (alloc_fd fds) = false := by
-  apply errno_ret_in_fd es (alloc_fd fds) Hok
-  have h := alloc_fd_le fds
-  have h2 : (4096 : Int) < 2147483648 := by decide
-  show ((alloc_fd fds).toNat : Int) < 2147483648
-  omega
-
-/-- Invert one `seqSpec (modifySpec f) (ret_only r)` step: the effect is
-    the single return [r], the model is [f m], and nothing is emitted.
-    Stated once because the two `dup3` success arms below share it. -/
-theorem seqSpec_modify_ret_only_inv (f : Model → Model) (r : word)
-    (i : SyscallInput) (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (modifySpec f) (ret_only r) i m (.ok eff m' evs)) :
-    eff = mkEffect r [] [] ∧ m' = f m ∧ evs = [] := by
-  obtain ⟨u, m2, evs1, evs2, hm, hr, hevs⟩ := H
-  cases hm
-  cases hr
-  simp only [List.nil_append] at hevs
-  exact ⟨rfl, rfl, hevs⟩
-
-/-- A `modify`-then-return step never declines; its first component is a
-    state write and its second a `pure`.  Stated here, as above. -/
-theorem seqSpec_never_unmodeled (f : Model → Model) (r : word) (i : SyscallInput)
-    (m : Model) : ¬ seqSpec (modifySpec f) (ret_only r) i m .unmodeled := by
-  intro H
-  rcases H with hm | ⟨u, m2, evs2, hm, hr⟩
-  · exact nomatch hm
-  · exact nomatch hr
-
 /-- The failure arm of `dup` never declines, either: it draws its errno
     from a `choose` and returns it, and the success arm only writes and
     returns.  Stated here because `inv_ok` would consume it inline. -/
@@ -205,7 +138,7 @@ theorem dup_alt_unmodeled_false (fds : List (word × FdEntry)) (e : FdEntry)
     · obtain ⟨fd', -, heq⟩ := hdecl
       exact nomatch heq
     · obtain ⟨fd, m1, evs1, hlow, hk⟩ := hrest
-      exact absurd hk (seqSpec_never_unmodeled
+      exact absurd hk (seqSpec_modify_ret_only_never_unmodeled
         (fun mm => with_fds (fd_insert fds fd e) mm) fd i m1)
 
 /- =========================================================================
@@ -612,14 +545,14 @@ theorem check_dup3_complete_unmodeled (oldfd newfd flags : word) (m : Model)
             | some x =>
               simp only [hnf] at H
               exact absurd H
-                (seqSpec_never_unmodeled
+                (seqSpec_modify_ret_only_never_unmodeled
                   (fun mm => with_fds (fd_insert (m_fds m) newfd e) mm) newfd i m)
             | none =>
               simp only [hnf] at H
               by_cases hb : decide ((newfd.toNat : Int) < NR_OPEN_DEFAULT) = true
               · rw [ite_eq_left hb] at H
                 exact absurd H
-                  (seqSpec_never_unmodeled
+                  (seqSpec_modify_ret_only_never_unmodeled
                     (fun mm => with_fds (fd_insert (m_fds m) newfd e) mm) newfd i m)
               · rw [ite_eq_right hb] at H
                 simp only [check_dup3, ite_eq_right hf, ite_eq_right hne, ite_eq_right hl, hfd, ite_eq_right hk,
@@ -650,7 +583,7 @@ private def portFds : List (word × FdEntry) :=
     empty file system, EOF on stdin, no halt, and the default
     RLIMIT_NOFILE. -/
 private def portModel : Model :=
-  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel portFds (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- A closed `oldfd` is -EBADF. -/
 example (eff : SyscallEffect) :
@@ -779,3 +712,8 @@ example (eff : SyscallEffect) : check_dup3 0 70 0 eff portModel = .CheckUnmodele
     ¬(decide (((70 : word).toNat : Int) < NR_OPEN_DEFAULT) = true))]
 
 end LinuxSem.Checks.Sys.Fs.File
+
+
+
+
+

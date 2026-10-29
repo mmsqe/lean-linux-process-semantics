@@ -21,8 +21,8 @@
   rather than duplicated, which is where the other clock code looks for
   them.  `Z` is `Int`, `Z_to_bv 64 z` is `BitVec.ofInt 64 z`,
   `bv_unsigned w` is `(w.toNat : Int)`, `None`/`Some` are `none`/`some`,
-  `nth_error` is the `abbrev` below (Lean's `l[n]?`), `mkInput` is the
-  `SyscallInput` constructor and
+  `nth_error` comes from `LinuxSem.Common.RocqSpelling` (Lean's `l[n]?`),
+  `mkInput` is the `SyscallInput` constructor and
   `CheckOk`/`CheckReject`/`CheckUnmodeled` are the `check_result`
   constructors.  The local `infix` notations restore the `Z` comparisons
   verbatim.
@@ -40,6 +40,7 @@ import LinuxSem.Checks.Cases.Kernel.Time.PosixTimers
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.Checks.Sys.Kernel.Time.Hrtimer
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Time.Hrtimer
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 set_option maxRecDepth 1000000
@@ -63,25 +64,10 @@ open LinuxSem.Checks.Cases.Kernel.Time.PosixTimers
 
 namespace LinuxSem.Checks.Cases.Kernel.Time.Hrtimer
 
-/-! ## The prelude's abbreviations, restored
+open LinuxSem.Common.RocqSpelling
 
-    Each is a transparent alias, so no statement below changes meaning. -/
-
-/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
-/-- `Z.leb` on `Int`. -/
-abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
-
-/-- `Z.ltb` on `Int`. -/
-abbrev zltb (a b : Int) : Bool := decide (a < b)
-
-/-- `nth_error`: `Option`-returning list indexing. -/
-abbrev nth_error {α : Type} [Inhabited α] (l : List α) (n : Nat) : Option α := l[n]?
+/-! Rocq spellings (`bv_unsigned`, `Z_to_bv`, `zleb`/`zltb`, `nth_error`) come
+    from `LinuxSem.Common.RocqSpelling`, opened above. -/
 
 /-- `<=?` on `Z`. -/
 local infix:50 " <=? " => zleb

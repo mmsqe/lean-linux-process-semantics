@@ -28,6 +28,7 @@
 -/
 import LinuxSem.Checks.Progress
 import LinuxSem.Checks.ExecutableSpecs
+import LinuxSem.Common.RocqSpelling
 
 set_option autoImplicit false
 
@@ -142,15 +143,15 @@ open LinuxSem.Checks.Witness.Drivers.Char.Random
 
 namespace LinuxSem.Checks.Sys.DispatchCompute
 
+open LinuxSem.Common.RocqSpelling
+
 /-! ## The local shims
 
-    The unsigned value of the syscall number.  A transparent alias, so no
-    statement below changes meaning: this is the very term
-    `Dispatch.check_syscall` dispatches on. -/
-
-/-- The unsigned value of a bitvector, in `Int` so that range arithmetic
-    does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
+    `bv_unsigned` (the unsigned syscall number, in `Int` so that range
+    arithmetic does not wrap, which is the very term `Dispatch.check_syscall`
+    dispatches on) and `Z_to_bv` are the shared transparent aliases of
+    `LinuxSem.Common.RocqSpelling`, opened above; no statement below changes
+    meaning. -/
 
 /-- `in_sysno` as a function (a `SyscallInput` field projection). -/
 abbrev in_sysno (i : SyscallInput) : word := i.in_sysno
@@ -158,8 +159,6 @@ abbrev in_sysno (i : SyscallInput) : word := i.in_sysno
 /-- The `Creds` projections, as functions: the four `get*id` checkers take
     the selector as an argument, and the alias is what lets a statement
     read `check_getid cr_uid eff m`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
-
 abbrev cr_uid : Creds → word := Creds.cr_uid
 abbrev cr_euid : Creds → word := Creds.cr_euid
 abbrev cr_gid : Creds → word := Creds.cr_gid

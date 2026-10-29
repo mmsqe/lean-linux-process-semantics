@@ -1387,11 +1387,12 @@ theorem access_ok_zero_witness_ok (buf count : word) (k : SysSpec SyscallEffect)
     exact H
   · simp only [hak, Bool.false_eq_true, ite_false]
     -- `access_ok_zero` lives in `Sys/Uaccess`, where `err_ret` is
-    -- `Uaccess.err_ret` (a definitional copy of `Syscall.err_ret`), so
-    -- the two names are unfolded explicitly rather than through
-    -- `errno_leaf`.
+    -- `Uaccess.err_ret` (the same shape as `Syscall.err_ret`) built on
+    -- `Uaccess.ret_only`, itself an alias of `Syscall.ret_only`; all three
+    -- names are unfolded explicitly rather than through `errno_leaf`.
     simp only [LinuxSem.LinuxProcessSem.Sys.Uaccess.err_ret,
       LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only,
+      LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only,
       LinuxSem.Checks.Witness.Prelude.ret_outcome, mkEffect,
       LinuxSem.LinuxProcessSem.pure]
 
@@ -1420,6 +1421,7 @@ theorem access_ok_zero_witness_ok_not (buf count : word) (k : SysSpec SyscallEff
     rw [ite_eq_right hak]
     simp only [LinuxSem.LinuxProcessSem.Sys.Uaccess.err_ret,
       LinuxSem.LinuxProcessSem.Sys.Uaccess.ret_only,
+      LinuxSem.LinuxProcessSem.Sys.Syscall.ret_only,
       LinuxSem.Checks.Witness.Prelude.ret_outcome, mkEffect,
       LinuxSem.LinuxProcessSem.pure]
 

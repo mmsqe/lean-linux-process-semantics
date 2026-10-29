@@ -46,7 +46,7 @@ open LinuxSem.LinuxProcessSem.Fs
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Fs.Open
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd z_ldiff)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.Checks.Witness.Prelude
 
 /- =========================================================================

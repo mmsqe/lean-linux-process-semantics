@@ -369,10 +369,18 @@ def default_nofile : word := BitVec.ofInt 64 1024
     that builds a model is unchanged.  The random device's stream starts
     EMPTY here (`IEof`) for the reason the accept queue starts silent:
     it is an input of the run, and the one place that installs one is
-    `init_model`, through `with_urandom`. -/
+    `init_model`, through `with_urandom`.
+
+    The last three parameters DEFAULT TO `none`, and every one of the
+    call sites in the tree used to spell them out: a fixture that means
+    to say nothing about halting, a tid or a core rlimit says `mkModel
+    fds vm IEof fs` and stops, which is what 116 sites already meant by
+    `none none none`.  Nothing else about the constructor changed, and a
+    call site that passes them explicitly still means exactly what it
+    did. -/
 def mkModel (fds : List (word × FdEntry)) (vm : VmMaps)
-    (stdin : InputStream) (fs : Fs.Fs) (halted : Option word)
-    (tid : Option word) (rlim : Option (List byte)) : Model :=
+    (stdin : InputStream) (fs : Fs.Fs) (halted : Option word := none)
+    (tid : Option word := none) (rlim : Option (List byte) := none) : Model :=
   Model.mkModelOf
     { fdst_table := fds, fdst_pipes := [] }
     { vmst_maps := vm, vmst_lazy := [], vmst_materialized := [] }

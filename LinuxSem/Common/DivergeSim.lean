@@ -119,6 +119,7 @@ import LinuxSem.Riscv.Decode
 import LinuxSem.Riscv.DecodeC
 import LinuxSem.Riscv.Sem
 import LinuxSem.Common.PropExec
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
@@ -131,6 +132,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.LinuxProcessSem.MemImageType
 open LinuxSem.LinuxProcessSem.StackLayout
 open LinuxSem.Common.PropExec
+open LinuxSem.Common.SharedFacts
 open behavior
 
 /-! The `StepTac.vm_refl_bv` idiom has no analogue: it exists  only to
@@ -160,18 +162,6 @@ theorem is_prefix_app_mono {A : Type} (e : List A) {a b : List A} :
 /- =========================================================================
    Accounted-step plumbing (segment-generic)
    ========================================================================= -/
-
-/-- An instruction that touches no memory materializes nothing: the
-    accounting layer is the identity on the model, WHATEVER the lazy
-    ledger holds.  This is `State.materialize_model_accesses_no_lazy`'s
-    dual, and it is what frees the loop lemmas from any `m_vm_lazy`
-    hypothesis — the ASan spin runs long after MAP_NORESERVE mappings
-    have populated the lazy ledger. -/
-theorem materialize_model_accesses_nil (m : Model) :
-    materialize_model_accesses m [] = some m := by
-  obtain ⟨fd, vm, io, fs, proc, lim, time⟩ := m
-  obtain ⟨maps, lazy, mat⟩ := vm
-  rfl
 
 /-- Read an accounted step off a raw access report. -/
 theorem mi_account_step_of_accesses (segs : List Segment) (ms : machine_state)
@@ -900,3 +890,4 @@ end Sanity
 end SelfJumpImage
 
 end LinuxSem.Common.DivergeSim
+

@@ -51,6 +51,7 @@ open LinuxSem.Common.CatSim
 open LinuxSem.Common.SeqExec
 open LinuxSem.Common.StepTac
 open LinuxSem.Common.MmapSim
+open LinuxSem.Examples.RwxFlagNs.RwxFlagNsDefs
 
 namespace LinuxSem.Examples.RwxFlagNs
 
@@ -102,10 +103,6 @@ theorem TD_1001198 :
 
 theorem TD_100119c :
     decodeAny 0x1a854503 = some (Instr.load .SZ1 false 0x0a#5 0x0a#5 0x1a8#12, 4) := by
-  decide
-
-theorem TD_10011a0 :
-    decodeAny 0x05d00893 = some (Instr.opImm .ADD 0x11#5 0x00#5 0x05d#12, 4) := by
   decide
 
 theorem TD_10011a4 : decodeAny 0x00000073 = some (Instr.ecall, 4) := by
@@ -184,3 +181,5 @@ end TargetProof
 end RwxFlagNsTarget
 
 end LinuxSem.Examples.RwxFlagNs
+
+

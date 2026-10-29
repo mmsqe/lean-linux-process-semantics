@@ -144,20 +144,6 @@ private theorem eff_shape_ne_unmodeled {f : word → word → List byte → chec
   · exact hf _ _ _ hh
   · exact nomatch hh
 
-/-- An accepted outcome forces the effect's shape: exactly one write, at
-    some address, of some byte list — and the branch body accepted it. -/
-private theorem eff_shape_ok {f : word → word → List byte → check_result}
-    {eff : SyscallEffect} {m' : Model} {evs : List event}
-    (H : (match eff with
-          | ⟨r, [(a, bs)], [], [], [], []⟩ => f r a bs
-          | _ => .CheckReject) = .CheckOk m' evs) :
-    ∃ r a bs, eff = ⟨r, [(a, bs)], [], [], [], []⟩ ∧ f r a bs = .CheckOk m' evs := by
-  obtain ⟨r, ws, zs, us, cs, ks⟩ := eff
-  split at H
-  · rename_i r' a' bs' heq
-    exact ⟨r', a', bs', heq, H⟩
-  · exact nomatch H
-
 theorem check_clock_gettime_sound_ok (i : SyscallInput) (clkid tp : word)
     (eff : SyscallEffect) (m m' : Model) (evs : List event)
     (H : check_clock_gettime i clkid tp eff m = .CheckOk m' evs) :
@@ -266,41 +252,6 @@ theorem check_clock_gettime_sound_ok (i : SyscallInput) (clkid tp : word)
     body also uses (`choose`, and the `modify` the monotonic arm ends
     with).  Each is a plain unfolding of `bind`, local to this file. -/
 
-/-- [bind] over the environment's [choose]: an accepted outcome names the
-    chosen value and its evidence.  ([choose] has no inversion lemma, and
-    the checkers need one in both outcome shapes.) -/
-private theorem choose_bind_ok_inv {A B : Type} (P : A → Prop) (k : A → SysSpec B)
-    (i : SyscallInput) (m : Model) (y : B) (m' : Model) (evs : List event)
-    (H : bind (choose P) k i m (.ok y m' evs)) :
-    ∃ x, P x ∧ k x i m (.ok y m' evs) := by
-  unfold LinuxSem.LinuxProcessSem.bind
-    LinuxSem.LinuxProcessSem.choose at H
-  obtain ⟨x, m1, evs1, evs2, hc, hk, hevs⟩ := H
-  obtain ⟨x0, hP, hok⟩ := hc
-  simp only [Outcome.ok.injEq] at hok
-  obtain ⟨hx, hm1, hevs1⟩ := hok
-  subst hx; subst hm1; subst hevs1
-  simp only [List.nil_append] at hevs
-  subst hevs
-  exact ⟨_, hP, hk⟩
-
-/-- The same inversion in the [Unmodeled] shape: [choose] itself never
-    declines, so the decline is the continuation's. -/
-private theorem choose_bind_unmodeled_inv {A B : Type} (P : A → Prop) (k : A → SysSpec B)
-    (i : SyscallInput) (m : Model)
-    (H : bind (choose P) k i m .unmodeled) :
-    ∃ x, P x ∧ k x i m .unmodeled := by
-  unfold LinuxSem.LinuxProcessSem.bind
-    LinuxSem.LinuxProcessSem.choose at H
-  rcases H with h | ⟨x, m1, evs1, hc, hk⟩
-  · obtain ⟨x, hP, hok⟩ := h
-    exact nomatch hok
-  · obtain ⟨x0, hP, hok⟩ := hc
-    simp only [Outcome.ok.injEq] at hok
-    obtain ⟨hx, hm1, hevs1⟩ := hok
-    subst hx; subst hm1; subst hevs1
-    exact ⟨_, hP, hk⟩
-
 theorem check_clock_gettime_sound_unmodeled (i : SyscallInput) (clkid tp : word)
     (eff : SyscallEffect) (m : Model)
     (H : check_clock_gettime i clkid tp eff m = .CheckUnmodeled) :
@@ -353,22 +304,6 @@ theorem check_clock_gettime_sound_unmodeled (i : SyscallInput) (clkid tp : word)
             rw [hdst] at H
             exact absurd H (eff_shape_ne_unmodeled
               (fun r a bs => if_ok_or_reject_ne_unmodeled _) eff)
-
-/-- [bind] over a [modify]: the continuation runs on the updated model. -/
-private theorem modify_bind_ok_inv {B : Type} (f : Model → Model) (k : Unit → SysSpec B)
-    (i : SyscallInput) (m : Model) (y : B) (m' : Model) (evs : List event)
-    (H : bind (modify f) k i m (.ok y m' evs)) :
-    k () i (f m) (.ok y m' evs) := by
-  unfold LinuxSem.LinuxProcessSem.bind
-    LinuxSem.LinuxProcessSem.modify at H
-  obtain ⟨x, m1, evs1, evs2, hc, hk, hevs⟩ := H
-  cases x
-  simp only [Outcome.ok.injEq, true_and] at hc
-  obtain ⟨hm1, hevs1⟩ := hc
-  subst hm1; subst hevs1
-  simp only [List.nil_append] at hevs
-  subst hevs
-  exact hk
 
 theorem check_clock_gettime_complete_ok (i : SyscallInput) (clkid tp : word)
     (eff : SyscallEffect) (m m' : Model) (evs : List event)
@@ -504,3 +439,7 @@ theorem check_clock_gettime_complete_unmodeled (i : SyscallInput) (clkid tp : wo
                 reduceCtorEq, and_false, exists_false, false_or] at hk
 
 end LinuxSem.Checks.Sys.Kernel.Time.PosixTimers
+
+
+
+

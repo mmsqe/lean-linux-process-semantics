@@ -59,4 +59,40 @@ theorem sysspec_bind_assoc {A B C : Type} (c : SysSpec A) (k : A → SysSpec B)
     sysEquiv (bind (bind c k) h) (bind c (fun x => bind (k x) h)) :=
   bind_assoc c k h
 
+/-! ## The prologue peel
+
+`i <- inputSpec ;; <body>` reads the input and the model it started in, so
+`bind inputSpec k` at `(i, m)` is `k i i` — the body receives the input it
+was handed, and the same input again as the reader's value.  This is the
+one-line inversion every spec and every checker proof starts with; it used
+to be restated privately in each file that needed it (`Checks/Sys/Fs/Pipe`,
+`Checks/Sys/Kernel/Sched/Syscalls`, `Checks/Witness/...`,
+`LinuxProcessSem/Sys/Drivers/Char/Random`, and others), which is what this
+statement replaces. -/
+theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
+    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
+    bind inputSpec k i m o ↔ k i i m o := by
+  cases o with
+  | ok x m' evs =>
+      simp only [LinuxSem.LinuxProcessSem.bind]
+      constructor
+      · rintro ⟨x0, m1, evs1, evs2, h1, h2, h3⟩
+        simp only [inputSpec, LinuxSem.LinuxProcessSem.input, Outcome.ok.injEq] at h1
+        obtain ⟨rfl, rfl, rfl⟩ := h1
+        simp only [List.nil_append] at h3
+        subst h3
+        exact h2
+      · intro h
+        exact ⟨i, m, [], evs, rfl, h, by simp⟩
+  | unmodeled =>
+      simp only [LinuxSem.LinuxProcessSem.bind]
+      constructor
+      · rintro (h | ⟨x0, m1, evs1, h1, h2⟩)
+        · exact absurd h (by simp [inputSpec, LinuxSem.LinuxProcessSem.input])
+        · simp only [inputSpec, LinuxSem.LinuxProcessSem.input, Outcome.ok.injEq] at h1
+          obtain ⟨rfl, rfl, rfl⟩ := h1
+          exact h2
+      · intro h
+        exact Or.inr ⟨i, m, [], rfl, h⟩
+
 end LinuxSem.LinuxProcessSem

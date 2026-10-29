@@ -36,6 +36,7 @@
 import LinuxSem.Common.AsanNodesMmLib
 import LinuxSem.Common.AsanNodesLibE
 import LinuxSem.Common.AsanNodesIface
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanNodesMmB
 
@@ -59,6 +60,7 @@ open LinuxSem.Common.StreamExec
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AgentNodes
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.AxSymExec3Sound
 open LinuxSem.Common.AxSymRun3
@@ -125,37 +127,6 @@ theorem lit_diff_sound (E : env) (e f : expr) (d : Int) (H : lit_diff e f = some
   | EMdw a b c => simp at H
   | EExt a b c d => simp at H
   | EBlob a b c d => simp at H
-
-/-- `page_aligned k e`: the value is a multiple of 4096. -/
-theorem page_aligned_sound (SEGS : List Segment) (E : env) (M : word → Option byte)
-    (k : List kentry) (e : expr) (HK : know_ok SEGS E M k)
-    (H : page_aligned k e = true) : bv_unsigned (edenot E e) % 4096 = 0 := by
-  unfold page_aligned at H
-  have GEN : 12 ≤ ealign k e → bv_unsigned (edenot E e) % 4096 = 0 := by
-    intro Hle
-    obtain ⟨-, Hdiv⟩ := ealign_sound SEGS E M k e HK
-    have hdvd : zpow 2 12 ∣ bv_unsigned (edenot E e) :=
-      Int.dvd_trans (pow2_divide_le 12 (ealign k e) ⟨by omega, Hle⟩) Hdiv
-    have h4096 : (4096 : Int) = zpow 2 12 := by decide
-    rw [h4096]
-    exact Int.emod_eq_zero_of_dvd hdvd
-  cases e with
-  | ELit z =>
-    have hz : z % 4096 = 0 := by
-      have h' : (z % 4096 == 0) = true := H
-      simpa using h'
-    have hu : bv_unsigned (edenot E (.ELit z)) = z % two64 := u_lit64 z
-    rw [hu]
-    rw [show two64 = (2:Int)^64 from rfl]
-    rw [Int.emod_emod_of_dvd z (by decide : (4096:Int) ∣ (2:Int)^64)]
-    exact hz
-  | EVar n => exact GEN (of_decide_eq_true H)
-  | EAlu a b c => exact GEN (of_decide_eq_true H)
-  | EAluw a b c => exact GEN (of_decide_eq_true H)
-  | EMd a b c => exact GEN (of_decide_eq_true H)
-  | EMdw a b c => exact GEN (of_decide_eq_true H)
-  | EExt a b c d => exact GEN (of_decide_eq_true H)
-  | EBlob a b c d => exact GEN (of_decide_eq_true H)
 
 /-- An overlapping entry refutes `region_free`. -/
 theorem region_free_false_of_overlap (lo n a sz : word) (L : List (word × word))
@@ -516,29 +487,6 @@ theorem vis_add_shape (A : atable) (LIMIT : Int) (cs : acs) (b n : expr)
       exact ⟨hflat, rfl, rfl, rfl, rfl, rfl⟩
     · simp at Hv
 
-/-- Inversion of `vis_add` as far as the other conjuncts need it. -/
-theorem vis_add_inv (A : atable) (LIMIT : Int) (cs : acs) (b n : expr)
-    (k : List kentry) (cs2 : acs) (Hv : vis_add A LIMIT cs b n k = some cs2) :
-    ∃ nhi, xhi (kn cs) n = some nhi ∧
-      cs2 = { a_ss := mk_ss (pc cs) cs.a_ss.s_regs
-                (shadow_facts A (kn cs) cs.a_maps b n ++ k) (nxt cs),
-              a_maps := cs.a_maps, a_totsz := cs.a_totsz, a_ylo := cs.a_ylo,
-              a_eager := cs.a_eager, a_vis := (b, n) :: cs.a_vis, a_ghost := cs.a_ghost,
-              a_abytes := cs.a_abytes + vis_cost nhi, a_brk := cs.a_brk, a_fd := cs.a_fd,
-              a_tidset := cs.a_tidset } := by
-  rw [vis_add_eq] at Hv
-  unfold vis_add_ref at Hv
-  simp only [] at Hv
-  cases hx : xhi (kn cs) n with
-  | none => rw [hx] at Hv; cases Hv
-  | some nhi =>
-    rw [hx] at Hv
-    simp only [] at Hv
-    split at Hv
-    · simp only [Option.some.injEq] at Hv
-      exact ⟨nhi, rfl, Hv.symm⟩
-    · simp at Hv
-
 /-! #########################################################################
     ## C. M5 munmap — the small facts of the section
     ######################################################################### -/
@@ -558,18 +506,6 @@ theorem reserved_free_above (SEGS : List Segment) (A : atable) (model : Model)
   rw [show decide (bv_unsigned lo < bv_unsigned b + bv_unsigned s) = false from by
         simp only [decide_eq_false_iff_not]; omega]
   simp
-
-/-- `split_flat_estart`. -/
-theorem split_flat_estart (SEGS : List Segment) (E : env) (M : word → Option byte)
-    (k : List kentry) (e b : expr) (off : Int) (n : expr)
-    (HK : know_ok SEGS E M k) (Hsp : split_lit e = (b, off))
-    (Hfl : flat_x k b off n = true) :
-    estart E (SA b off) = bv_unsigned (edenot E e) ∧
-      estart E (SA b off) + bv_unsigned (edenot E n) ≤ 2 ^ 64 ∧
-      0 < bv_unsigned (edenot E n) := by
-  obtain ⟨F1, F2, F3⟩ := flat_x_sound SEGS E M k b off n HK Hfl
-  have Up := u_of_split E e b off Hsp ⟨F1, by omega⟩
-  exact ⟨Up.symm, F2, F3⟩
 
 /-- `len_eqb_sound`. -/
 theorem len_eqb_sound (SEGS : List Segment) (E : env) (M : word → Option byte)
@@ -3373,3 +3309,6 @@ theorem node_brk2_sound (SEGS : List Segment) (A : atable) (nx0 : Nat) (LIMIT : 
 /-!
   Word hygiene: this file contains no proof hole and no extra postulate.
 -/
+
+
+

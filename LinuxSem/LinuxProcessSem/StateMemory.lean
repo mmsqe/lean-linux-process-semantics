@@ -193,7 +193,7 @@ theorem rw_count_clamp_range (count : word) :
 /-- `BitVec.ofInt n z` round-trips through `toNat` for a non-negative `z`
     below the modulus.  This is here
     `Z_to_bv_unsigned` + `bv_wrap_small` pair, stated once. -/
-private theorem toNat_ofInt_eq_self {n : Nat} {z : Int}
+theorem toNat_ofInt_eq_self {n : Nat} {z : Int}
     (h0 : 0 ≤ z) (h1 : z < ((2 ^ n : Nat) : Int)) :
     ((BitVec.ofInt n z).toNat : Int) = z := by
   rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt h0 h1, Int.toNat_of_nonneg h0]
@@ -881,3 +881,4 @@ example : scatter_iovecs (sanityMem [0, 0, 0, 0]) [(0, 2)] [7, 8] = some [(0, [7
   decide
 
 end LinuxSem.LinuxProcessSem
+

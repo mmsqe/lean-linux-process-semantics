@@ -1019,7 +1019,7 @@ private def inp (bs : List byte) : SyscallInput :=
 
 /-- A model over `fs`, empty descriptor table. -/
 private def modelOf (fs : Fs.Fs) : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof fs none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof fs
 
 /-- `f` as a pathname, NUL-terminated. -/
 private def fInput : SyscallInput := inp [0x66, 0]
@@ -1204,11 +1204,9 @@ example : unlinkat_spec AT_FDCWD32 0 noFlags fSlashInput (modelOf fsF)
     path, not an inode, so the unlinked-but-still-open file is not
     representable. -/
 example : unlinkat_spec AT_FDCWD32 0 noFlags fInput
-    (mkModel [(3, FdEntry.FdFile [0x66] 0)] (mkVmMaps [] [] 0 0 0) IEof fsF
-      none none none) .unmodeled := by
+    (mkModel [(3, FdEntry.FdFile [0x66] 0)] (mkVmMaps [] [] 0 0 0) IEof fsF) .unmodeled := by
   refine unlinkat_spec_unmodeled AT_FDCWD32 0 noFlags fInput
-    (mkModel [(3, FdEntry.FdFile [0x66] 0)] (mkVmMaps [] [] 0 0 0) IEof fsF
-      none none none) (by decide) ?_
+    (mkModel [(3, FdEntry.FdFile [0x66] 0)] (mkVmMaps [] [] 0 0 0) IEof fsF) (by decide) ?_
   simp only [unlinkat_body_spec]
   unlinkat_ground
 

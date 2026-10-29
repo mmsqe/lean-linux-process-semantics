@@ -248,17 +248,6 @@ private theorem check_unlink_found_sound_ok (i : SyscallInput) (p c : Fs.path)
    removal's [with_fs], which does not touch `m_vm`).
    ------------------------------------------------------------------------- -/
 
-/-- An accepted [check_ret_only] hands back the model it was
-    given, so it leaves [m_vmmaps] alone.  [check_ret_only_ok_iff] says
-    the same thing; this is the one-projection corollary the three frame
-    lemmas below share. -/
-private theorem check_ret_only_frame (eff : SyscallEffect) (r : word)
-    (m m' : Model) (evs : List event)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    m_vmmaps m' = m_vmmaps m := by
-  obtain ⟨-, rfl, -⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rfl
-
 /-- Frame fact for [Checks/VmMapsDisjoint.lean]: the shared tail only ever
     answers a [check_ret_only] over [m] or a [check_unlink_result] over it
     (an injected errno, or the removal's [with_fs]), so it leaves [m_vmmaps]
@@ -1383,3 +1372,4 @@ example (p c : Fs.path) (eff : SyscallEffect) (m : Model)
   rw [ite_eq_right h1, ite_eq_right h2, ite_eq_left h]
 
 end LinuxSem.Checks.Sys.Fs.Namei
+

@@ -121,7 +121,7 @@ theorem wait4_witness_ok (upid stat_addr options rusage : word) (i : SyscallInpu
 /-- A model whose process has no child — `mkModel`'s default, which is the
     one state `wait4` answers. -/
 private def port_model : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The `exit` witness is exactly the spec's one step: return 0, halt at
     the LOW BYTE of `code`. -/

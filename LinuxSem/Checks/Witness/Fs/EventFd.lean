@@ -34,7 +34,6 @@ open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
-open LinuxSem.LinuxProcessSem.Sys.Fs.File
 open LinuxSem.LinuxProcessSem.Sys.Fs.EventFd
 open LinuxSem.Checks.Witness.Prelude
 
@@ -81,7 +80,7 @@ theorem eventfd2_witness_ok (flags : word) (i : SyscallInput) (m : Model) :
     in it can matter to eventfd2 — the answer is a function of the flag
     word alone. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- BAD FLAGS ARE -EINVAL: the witness answers the errno word on the one
     arm the kernel answers it on. -/

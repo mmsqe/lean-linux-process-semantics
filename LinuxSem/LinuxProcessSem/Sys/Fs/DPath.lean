@@ -205,7 +205,7 @@ private def demoInput : SyscallInput :=
     to getcwd — the spec never looks at the model — which is exactly the
     property the fail-closed arm rests on. -/
 private def demoModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The bare-return effect for errno `e`: what `err_ret e` produces, with
     all five ledgers empty. -/
@@ -266,7 +266,7 @@ private theorem errno_from_ok (es : List Int) (i : SyscallInput) (m : Model)
 
 /-- `err_ret` never declines: a bare return is an `ok`, not an
     `unmodeled`. -/
-private theorem err_ret_unmodeled_false (e : Int) (i : SyscallInput) (m : Model) :
+theorem err_ret_unmodeled_false (e : Int) (i : SyscallInput) (m : Model) :
     ¬ err_ret e i m .unmodeled := by
   unfold err_ret ret_only pure
   intro h
@@ -550,3 +550,4 @@ example : (errEffect ENAMETOOLONG).eff_writes = [] := rfl
 example : errEffect ERANGE = mkEffect (errno_ret ERANGE) [] [] := rfl
 
 end LinuxSem.LinuxProcessSem.Sys.Fs.DPath
+

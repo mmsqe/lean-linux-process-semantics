@@ -109,6 +109,7 @@ but as a hard crash rather than a failure.  Every
 import LinuxSem.Common.AsanNodesLibE
 import LinuxSem.Common.AsanNodesMmLib
 import LinuxSem.Common.AsanNodesIface
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanNodesMmA
 
@@ -132,6 +133,7 @@ open LinuxSem.Common.StreamExec
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AgentNodes
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.AxSymExec3Sound
 open LinuxSem.Common.AxSymRun3

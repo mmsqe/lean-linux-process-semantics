@@ -79,6 +79,7 @@
 -/
 import LinuxSem.Common.AsanPlanSound
 import LinuxSem.Common.AsanPlan
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanNodesIface
 
@@ -91,6 +92,7 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AgentLib
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 open LinuxSem.Common.BackingAlgebra
 open LinuxSem.Common.AxSymExec3Sound

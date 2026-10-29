@@ -111,6 +111,7 @@
   - Word hygiene: this file contains no proof hole and no extra postulate.
 -/
 import LinuxSem.Common.AxSymExec3B
+import LinuxSem.Common.RocqSpelling
 
 namespace LinuxSem.Common.AsanPlanCore
 
@@ -121,6 +122,7 @@ open LinuxSem.LinuxProcessSem.RiscvSemantics
 open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.Common.PropExec hiding zland zlor zlxor
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3B
 
 set_option linter.unusedSectionVars false

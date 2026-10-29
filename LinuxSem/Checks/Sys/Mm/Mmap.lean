@@ -1679,43 +1679,14 @@ theorem check_mmap_sound_unmodeled (addr len prot flags fd off : word) (eff : Sy
                   · rw [ite_eq_right hnrr] at H ⊢
                     exact unmodeled_intro i m
 
-/-- `unmodeled` is not an `ok` outcome — the shape every spec arm past the
-    gates rules out when the spec is asked to decline.  (The same private
-    fact `Checks/Sys/Mm/Mremap.lean` states for the same purpose.) -/
-private theorem unmodeled_ne_ok {A M E : Type} (x : A) (m : M) (evs : List E) :
-    (Outcome.unmodeled : Outcome A M E) ≠ .ok x m evs := by
-  intro h
-  exact nomatch h
-
 /-! ## The four arm inversions `check_mmap_complete_ok` needs
 
     Every `ok` outcome of `mmap_spec` past its gates is one of four bind
     chains: an injected errno, a `choose`-grant, a bare modify-then-pure,
     or an errno whose failure also steps the ledger.  `inv_ok` would invert
-    each inline; each is stated once here, as `Checks/Sys/Mm/Mremap.lean`
-    does for its own spec.  They add no public surface. -/
-
-/-- The injected errno, inverted: an errno from the injectable set with no
-    ledger at all. -/
-private theorem errno_ok_inv (es : List Int) (i : SyscallInput) (m : Model)
-    (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : LinuxSem.LinuxProcessSem.bind (errno_from es)
-      (fun e => err_ret e) i m (.ok eff m' evs)) :
-    ∃ e, e ∈ es ∧ eff = mkEffect (errno_ret e) [] [] ∧ m' = m ∧ evs = [] := by
-  obtain ⟨e, m1, evs1, evs2, hc, hk, hevs⟩ := H
-  unfold errno_from choose at hc
-  obtain ⟨e0, hmem, hok⟩ := hc
-  simp only [Outcome.ok.injEq] at hok
-  obtain ⟨hex, hm1, hevs1⟩ := hok
-  rw [← hex] at hmem
-  rw [hm1] at hk
-  simp only [err_ret, ret_only, LinuxSem.LinuxProcessSem.pure,
-    Outcome.ok.injEq] at hk
-  obtain ⟨heff, hm, hevs2⟩ := hk
-  rw [hevs1] at hevs
-  simp only [List.nil_append] at hevs
-  rw [hevs2] at hevs
-  exact ⟨e, hmem, heff, hm, hevs⟩
+    each inline; each is stated once — the injected-errno inversion as the
+    shared `errno_from_ok_inv` of `Checks.Sys.Prelude`, the other three
+    here, as `Checks/Sys/Mm/Mremap.lean` does for its own spec. -/
 
 /-- A bare `modify`-then-`pure` resolution, inverted. -/
 private theorem modify_pure_ok_inv (f : Model → Model) (e : SyscallEffect)
@@ -1817,7 +1788,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
           simp only [alt] at H
           rcases H with herr | hgrant
           · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-              errno_ok_inv mmap_errnos i m eff m' evs herr
+              errno_from_ok_inv mmap_errnos i m eff m' evs herr
             rw [heff, hm, hevs]
             try dsimp only
             rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -1845,7 +1816,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
             simp only [alt] at H
             rcases H with herr | hgrant
             · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                errno_ok_inv mmap_errnos i m eff m' evs herr
+                errno_from_ok_inv mmap_errnos i m eff m' evs herr
               rw [heff, hm, hevs]
               try dsimp only
               rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -1916,7 +1887,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                         simp only [alt] at H
                         rcases H with herr | hrest
                         · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                            errno_ok_inv mmap_errnos i m eff m' evs herr
+                            errno_from_ok_inv mmap_errnos i m eff m' evs herr
                           rw [heff, hm, hevs]
                           try dsimp only
                           rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -1942,7 +1913,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                           simp only [alt] at H
                           rcases H with herr | hgrant
                           · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                              errno_ok_inv mmap_errnos i m eff m' evs herr
+                              errno_from_ok_inv mmap_errnos i m eff m' evs herr
                             rw [heff, hm, hevs]
                             try dsimp only
                             rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -1962,7 +1933,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                             simp only [alt] at H
                             rcases H with herr | hrest
                             · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                errno_ok_inv mmap_errnos i m eff m' evs herr
+                                errno_from_ok_inv mmap_errnos i m eff m' evs herr
                               rw [heff, hm, hevs]
                               try dsimp only
                               rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -2033,7 +2004,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                           simp only [alt] at H
                           rcases H with herr | hrest
                           · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                              errno_ok_inv mmap_errnos i m eff m' evs herr
+                              errno_from_ok_inv mmap_errnos i m eff m' evs herr
                             rw [heff, hm, hevs]
                             try dsimp only
                             rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -2060,7 +2031,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                             simp only [alt] at H
                             rcases H with herr | hgrant
                             · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                errno_ok_inv mmap_errnos i m eff m' evs herr
+                                errno_from_ok_inv mmap_errnos i m eff m' evs herr
                               rw [heff, hm, hevs]
                               try dsimp only
                               rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -2080,7 +2051,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                               simp only [alt] at H
                               rcases H with herr | hrest
                               · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                  errno_ok_inv mmap_errnos i m eff m' evs herr
+                                  errno_from_ok_inv mmap_errnos i m eff m' evs herr
                                 rw [heff, hm, hevs]
                                 try dsimp only
                                 rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -2151,7 +2122,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                             simp only [alt] at H
                             rcases H with herr | hgrant
                             · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                errno_ok_inv mmap_errnos i m eff m' evs herr
+                                errno_from_ok_inv mmap_errnos i m eff m' evs herr
                               rw [heff, hm, hevs]
                               try dsimp only
                               rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -2168,7 +2139,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                             simp only [alt] at H
                             rcases H with herr | heexist
                             · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                errno_ok_inv mmap_errnos i m eff m' evs herr
+                                errno_from_ok_inv mmap_errnos i m eff m' evs herr
                               rw [heff, hm, hevs]
                               try dsimp only
                               rw [ite_eq_left (by
@@ -2230,7 +2201,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                               simp only [alt] at H
                               rcases H with herr | hgrant
                               · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                  errno_ok_inv mmap_errnos i m eff m' evs herr
+                                  errno_from_ok_inv mmap_errnos i m eff m' evs herr
                                 rw [heff, hm, hevs]
                                 try dsimp only
                                 rw [ite_eq_left (errno_ret_in_intro mmap_errnos e hmem)]
@@ -2247,7 +2218,7 @@ theorem check_mmap_complete_ok (addr len prot flags fd off : word) (eff : Syscal
                               simp only [alt] at H
                               rcases H with herr | heexist
                               · obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                                  errno_ok_inv mmap_errnos i m eff m' evs herr
+                                  errno_from_ok_inv mmap_errnos i m eff m' evs herr
                                 rw [heff, hm, hevs]
                                 try dsimp only
                                 rw [ite_eq_left (by
@@ -2721,3 +2692,5 @@ example (m : Model) (eff : SyscallEffect) :
 /- --------------------------------------------------------------- getrandom -/
 
 end LinuxSem.Checks.Sys.Mm.Mmap
+
+

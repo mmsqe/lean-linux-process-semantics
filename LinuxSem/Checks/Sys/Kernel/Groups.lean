@@ -342,7 +342,7 @@ private def port_model (gs : List word) : Model :=
     { cr_uid := overflow_id, cr_euid := overflow_id, cr_suid := overflow_id
       cr_gid := overflow_id, cr_egid := overflow_id, cr_sgid := overflow_id
       cr_groups := gs }
-    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none)
+    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [])
 
 /-- The same model with `euid = 0`: the one id `creds_privileged` reads. -/
 private def port_model_root (gs : List word) : Model :=
@@ -350,7 +350,7 @@ private def port_model_root (gs : List word) : Model :=
     { cr_uid := overflow_id, cr_euid := BitVec.ofInt 64 0, cr_suid := overflow_id
       cr_gid := overflow_id, cr_egid := overflow_id, cr_sgid := overflow_id
       cr_groups := gs }
-    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none)
+    (mkModel [] (mkVmMaps [] [] 0 0 0) IEof [])
 
 /-- `getgroups(0, <anything>)` answers the count: 2 here. -/
 example (eff : SyscallEffect) :

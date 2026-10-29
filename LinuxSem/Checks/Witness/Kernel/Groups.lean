@@ -20,8 +20,10 @@
 
   The spec's body is an `if` at FUNCTION type (`getgroups_spec` is a
   `SysSpec`), so Lean's `whnf` on a goal that mentions it tries to decide
-  `sint32 gidsetsize < 0`, and reducing `sint32` on an opaque word recurses
-  without bottoming out (`maximum recursion depth`).  `by_cases`
+  `sint32 gidsetsize < 0`, and `sint32` on an opaque word does not reduce
+  far enough for that guard to be decided (while `sint32` had the earlier
+  `narrow` body the same attempt ran out of recursion depth instead).
+  `by_cases`
   normalises its goal, so each proof `generalize`s its conclusion into a
   local `Q : Prop` first, splits against `Q`, and only then rewrites `Q`
   back into the spec and discharges the branch with `simp only`.

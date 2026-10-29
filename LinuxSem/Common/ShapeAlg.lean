@@ -113,6 +113,7 @@ import LinuxSem.Common.ExitSim
 import LinuxSem.Common.MmapSim
 import LinuxSem.Common.WallSim
 import LinuxSem.EquivalenceDefinition.OmniEquivalence
+import LinuxSem.Common.SharedFacts
 
 set_option autoImplicit false
 
@@ -137,6 +138,7 @@ open LinuxSem.EquivalenceDefinition.Equivalence
 open LinuxSem.EquivalenceDefinition.OmniEquivalence
 
 namespace LinuxSem.Common.ShapeAlg
+open LinuxSem.Common.SharedFacts (is_prefix_app_mono is_prefix_app_r)
 
 /-- The FP state at process entry, so that the [MmapSim]/[CatSim] lemmas
     (whose proofs go through [PropExec.mkst]) elaborate.  Same local
@@ -147,20 +149,6 @@ local instance shapealg_fx : LinuxSem.Common.PropExec.FPState :=
 /- =========================================================================
    Prefix lemmas
    ========================================================================= -/
-
-theorem is_prefix_app_r {A : Type} (l m a : List A) (H : is_prefix a l) :
-    is_prefix a (l ++ m) := by
-  induction l generalizing a with
-  | nil =>
-    cases a with
-    | nil => exact is_prefix_nil _
-    | cons _ _ => exact False.elim H
-  | cons x l ih =>
-    cases a with
-    | nil => exact is_prefix_nil _
-    | cons y a =>
-      obtain ⟨rfl, H'⟩ := H
-      exact ⟨rfl, ih a H'⟩
 
 theorem is_prefix_app_split {A : Type} :
     ∀ (l a b : List A), is_prefix b (l ++ a) →
@@ -291,6 +279,44 @@ theorem t_writes_ch_exit_has_nil (ch : word) (bufs : List (List byte)) (code : w
   | nil => exact t_emit_has_nil _ _
   | cons b bs => exact t_emit_has_nil _ _
 
+/-- A single retry-loop write node collapses to one [t_emit] of the
+    whole buffer: the per-delivery alternatives denote the same set. -/
+theorem t_alt_wall (ch : word) (rest : List byte) (T : TSet)
+    (_HT : T []) (Hnb : 1 ≤ rest.length) :
+    t_eq (t_alt (fun i : wr_index rest =>
+            t_emit ((rest.take i.1).map (event.WriteEv ch))
+                   (t_emit ((rest.drop i.1).map (event.WriteEv ch)) T)))
+         (t_emit (rest.map (event.WriteEv ch)) T) := by
+  intro tr
+  constructor
+  · rintro ⟨⟨n, hn1, hn2⟩, Hi⟩
+    rcases Hi with Hp | ⟨tr1, he, Hi⟩
+    · refine Or.inl ?_
+      have hsplit : rest.map (event.WriteEv ch)
+          = (rest.take n).map (event.WriteEv ch) ++ (rest.drop n).map (event.WriteEv ch) := by
+        rw [← List.map_append, List.take_append_drop]
+      rw [hsplit]
+      exact is_prefix_app_r _ _ _ Hp
+    · subst he
+      rcases Hi with Hp | ⟨tr2, he2, Ht⟩
+      · refine Or.inl ?_
+        have hsplit : rest.map (event.WriteEv ch)
+            = (rest.take n).map (event.WriteEv ch) ++ (rest.drop n).map (event.WriteEv ch) := by
+          rw [← List.map_append, List.take_append_drop]
+        rw [hsplit]
+        exact is_prefix_app_mono _ _ _ Hp
+      · subst he2
+        refine Or.inr ⟨tr2, ?_, Ht⟩
+        simp only [← List.append_assoc, ← List.map_append, List.take_append_drop]
+  · rintro (Hp | ⟨tr', he, Ht⟩)
+    · refine ⟨wr_full rest Hnb, ?_⟩
+      simp only [wr_full, List.take_length]
+      exact Or.inl Hp
+    · subst he
+      refine ⟨wr_full rest Hnb, ?_⟩
+      simp only [wr_full, List.take_length, List.drop_length, List.map_nil]
+      exact Or.inr ⟨tr', rfl, Or.inr ⟨tr', rfl, Ht⟩⟩
+
 /-- The bridge to the hand-written shapes' spelling of the same set:
     [CatSim]'s "prefixes of [wevents bufs ++ [ExitEv code fs]]". -/
 theorem t_writes_ch_exit_iff (ch : word) (bufs : List (List byte)) (code : word)
@@ -331,44 +357,6 @@ theorem t_writes_exit_iff (bufs : List (List byte)) (code : word) (fs : Fs.Fs)
       is_prefix tr (wevents bufs ++ [event.ExitEv code fs]) := by
   unfold t_writes
   rw [t_writes_ch_exit_iff, wevents_ch_1]
-
-/-- A single retry-loop write node collapses to one [t_emit] of the
-    whole buffer: the per-delivery alternatives denote the same set. -/
-theorem t_alt_wall (ch : word) (rest : List byte) (T : TSet)
-    (_HT : T []) (Hnb : 1 ≤ rest.length) :
-    t_eq (t_alt (fun i : wr_index rest =>
-            t_emit ((rest.take i.1).map (event.WriteEv ch))
-                   (t_emit ((rest.drop i.1).map (event.WriteEv ch)) T)))
-         (t_emit (rest.map (event.WriteEv ch)) T) := by
-  intro tr
-  constructor
-  · rintro ⟨⟨n, hn1, hn2⟩, Hi⟩
-    rcases Hi with Hp | ⟨tr1, he, Hi⟩
-    · refine Or.inl ?_
-      have hsplit : rest.map (event.WriteEv ch)
-          = (rest.take n).map (event.WriteEv ch) ++ (rest.drop n).map (event.WriteEv ch) := by
-        rw [← List.map_append, List.take_append_drop]
-      rw [hsplit]
-      exact is_prefix_app_r _ _ _ Hp
-    · subst he
-      rcases Hi with Hp | ⟨tr2, he2, Ht⟩
-      · refine Or.inl ?_
-        have hsplit : rest.map (event.WriteEv ch)
-            = (rest.take n).map (event.WriteEv ch) ++ (rest.drop n).map (event.WriteEv ch) := by
-          rw [← List.map_append, List.take_append_drop]
-        rw [hsplit]
-        exact is_prefix_app_mono _ _ _ Hp
-      · subst he2
-        refine Or.inr ⟨tr2, ?_, Ht⟩
-        simp only [← List.append_assoc, ← List.map_append, List.take_append_drop]
-  · rintro (Hp | ⟨tr', he, Ht⟩)
-    · refine ⟨wr_full rest Hnb, ?_⟩
-      simp only [wr_full, List.take_length]
-      exact Or.inl Hp
-    · subst he
-      refine ⟨wr_full rest Hnb, ?_⟩
-      simp only [wr_full, List.take_length, List.drop_length, List.map_nil]
-      exact Or.inr ⟨tr', rfl, Or.inr ⟨tr', rfl, Ht⟩⟩
 
 /-- The bridge to the hand-written shapes' spelling of the same set:
     [CatSim]'s "prefixes of [full ++ [ExitEv code fs]] over the delivery
@@ -2094,4 +2082,28 @@ theorem cat_strong_equiv_alg_via_ch (source_segs : List Segment) (rpc : Nat)
     (to_wexit_ch_1 source_segs _ bufs code Hs)
     (to_wexit_ch_1 target_segs _ bufs code Ht) Hbm
 
+
+/-- [t_emit] respects [t_eq] in its continuation.  ([t_eq] is not a
+    registered setoid relation, so this replaces a [rewrite].) -/
+theorem t_emit_cong (e : List event) (T T' : TSet) (H : t_eq T T') :
+    t_eq (t_emit e T) (t_emit e T') := by
+  intro tr
+  unfold t_emit
+  constructor <;>
+    rintro (Hp | ⟨tr', he, HT⟩)
+  · exact Or.inl Hp
+  · exact Or.inr ⟨tr', he, (H tr').1 HT⟩
+  · exact Or.inl Hp
+  · exact Or.inr ⟨tr', he, (H tr').2 HT⟩
+
+
+/-- [t_alt2] respects [t_eq] in both arguments. -/
+theorem t_alt2_congr (A A' B B' : TSet)
+    (HA : t_eq A A') (HB : t_eq B B') :
+    t_eq (t_alt2 A B) (t_alt2 A' B') := by
+  intro tr
+  unfold t_alt2
+  exact or_congr (HA tr) (HB tr)
+
 end LinuxSem.Common.ShapeAlg
+

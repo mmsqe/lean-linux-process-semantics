@@ -3159,4 +3159,3 @@ theorem entry_page_top_within_window (ph : PhdrInfo) (sp : word)
   · unfold entry_block_top
     omega
   · decide
-

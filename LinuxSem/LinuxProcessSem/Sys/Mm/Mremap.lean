@@ -1585,7 +1585,7 @@ private def demoVm : VmMaps :=
     (BitVec.ofInt 64 0) (BitVec.ofInt 64 0) 0x100000
 
 private def demoModel : Model :=
-  mkModel [] demoVm IEof [] none none none
+  mkModel [] demoVm IEof []
 
 /-- A second demo ledger: ONE live anonymous mapping of three pages,
     `[0x1000, 0x4000)`, for the calls that have to resize a tracked entry
@@ -1596,7 +1596,7 @@ private def demoVmLarge : VmMaps :=
     (BitVec.ofInt 64 0) (BitVec.ofInt 64 0) 0x100000
 
 private def demoModelLarge : Model :=
-  mkModel [] demoVmLarge IEof [] none none none
+  mkModel [] demoVmLarge IEof []
 
 /-- A syscall input for `mremap` (216).  The spec reads none of it; it is
     here because a `SysSpec` is a relation on an input as well as a model. -/
@@ -1940,6 +1940,8 @@ example :
     answered return really is `old`. -/
 example : errno_ret ENOMEM = BitVec.ofInt 64 (-12) := by decide
 example : errno_ret EINVAL = BitVec.ofInt 64 (-22) := by decide
+
+
 
 
 

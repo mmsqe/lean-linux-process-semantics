@@ -171,12 +171,10 @@ theorem word_to_nat_len_word {A : Type} (l : List A)
 
 /-- [fd32] on small values and on AT_FDCWD. -/
 theorem fd32_small (fd : word) (H : (fd.toNat : Int) < 2 ^ 32) : fd32 fd = fd := by
-  unfold fd32 abi_low32
+  unfold fd32 abi_low32 LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32
   rw [Nat.mod_eq_of_lt (by omega)]
   apply BitVec.eq_of_toNat_eq
-  rw [BitVec.toNat_ofInt, AgentLib.two_pow64_cast,
-    Int.emod_eq_of_lt (a := ((fd.toNat : Nat) : Int)) (b := 2 ^ 64) (by omega) (by omega),
-    Int.toNat_natCast]
+  rw [BitVec.toNat_ofNat, Nat.mod_eq_of_lt fd.isLt]
 
 theorem fd32_AT_FDCWD : fd32 AT_FDCWD = AT_FDCWD32 := rfl
 
@@ -185,8 +183,8 @@ theorem fd32_is_AT_FDCWD32 (w : word)
     (Hw : (w.toNat : Int) % 2 ^ 32 = 2 ^ 32 - 100) : fd32 w = AT_FDCWD32 := by
   have hA : AT_FDCWD32 = BitVec.ofNat 64 (2 ^ 32 - 100) := by decide
   have h1 : w.toNat % 2 ^ 32 = 2 ^ 32 - 100 := by omega
-  unfold fd32 abi_low32
-  rw [h1, hA, BitVec.ofInt_natCast]
+  unfold fd32 abi_low32 LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32
+  rw [h1, hA]
 
 theorem AT_FDCWD_low32 : (AT_FDCWD.toNat : Int) % 2 ^ 32 = 2 ^ 32 - 100 := by decide
 

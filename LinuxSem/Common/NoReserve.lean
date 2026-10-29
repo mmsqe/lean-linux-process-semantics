@@ -152,8 +152,11 @@ import LinuxSem.Common.LazyFrame
 import LinuxSem.Common.ExitSim
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.Checks.Sys.Mm.Mmap
+import LinuxSem.Common.SharedFacts
 
 namespace LinuxSem.Common.NoReserve
+
+open LinuxSem.Common.SharedFacts (materialize_model_accesses_nil)
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -167,7 +170,7 @@ open LinuxSem.Checks.Sys.Mm.Mmap
 open LinuxSem.Checks.Sys.Prelude (errno_ret_in errno_ret_in_below errno_ret_in_true
   errno_ret_in_intro listNN_eqb listNN_eqb_eq check_result)
 open LinuxSem.Common.PropExec
-open LinuxSem.Common.DivergeSim (materialize_model_accesses_nil to_spin)
+open LinuxSem.Common.DivergeSim (to_spin)
 open LinuxSem.Common.SpinAlg
 open LinuxSem.Common.ShapeAlg
 open LinuxSem.Common.LazyFrame
@@ -177,7 +180,6 @@ open LinuxSem.Common.MmapSim (mmap_model grant_ok mmap_args_ok mmap_args_ok_gate
   munmap_ok munmap_ok_inv grant_ok_unpack grant_not_errno munmap_model_halted mmap_model_halted
   munmap_args_ok munmap_no_unmodeled ENOMEM_in_mmap_errnos page_round_up)
 open LinuxSem.Common.CatSim (apply_effect_no_write apply_effect_copyins_no_write
-  is_prefix_app_mono
   fd1chan msteps buf_modeled write1_ok_n write1_ok_inv write1_no_unmodeled
   sstep_write_inv sstep_write_next_inv wpick wevents_ch wpick_wevents)
 
@@ -1814,59 +1816,6 @@ theorem stepacc_ld (segs : List Segment) (regs : BvMap word) (pc : word)
     the prefix lemmas (`is_prefix_app`, `is_prefix_app_split`,
     `is_prefix_app_mono`, `is_prefix_trans`). -/
 
-/-- `ShapeAlg.t_writes_ch_pick_exit_iff`, verbatim: the shape of
-    a list of `write(ch, ...)`s followed by an exit is exactly the set of
-    environment delivery choices followed by that exit. -/
-theorem t_writes_ch_pick_exit_iff (ch : word) (bufs : List (List byte))
-    (code : word) (fs : Fs.Fs) (tr : List event)
-    (Hall : ∀ b ∈ bufs, 1 ≤ b.length) :
-    bufs.foldr (t_write_ch ch) (t_exit code fs) tr ↔
-      ∃ full, wpick ch bufs full ∧ is_prefix tr (full ++ [event.ExitEv code fs]) := by
-  revert Hall tr
-  induction bufs with
-  | nil =>
-    intro tr Hall
-    unfold t_exit t_emit t_nil
-    constructor
-    · rintro (h | ⟨tr', rfl, rfl⟩)
-      · exact ⟨[], wpick.wp_nil, by simpa using h⟩
-      · exact ⟨[], wpick.wp_nil, by simpa using is_prefix_refl [event.ExitEv code fs]⟩
-    · rintro ⟨full, hw, hp⟩
-      cases hw with
-      | wp_nil => exact Or.inl (by simpa using hp)
-  | cons b bs ih =>
-    intro tr Hall
-    have hb : 1 ≤ b.length := Hall b (by simp)
-    have hbs : ∀ x ∈ bs, 1 ≤ x.length := fun x hx => Hall x (by simp [hx])
-    unfold t_write_ch
-    simp only [List.foldr_cons]
-    unfold t_alt
-    constructor
-    · rintro ⟨⟨n, hn1, hn2⟩, h | ⟨tr', rfl, hT⟩⟩
-      · refine ⟨List.map (event.WriteEv ch) (b.take n) ++ wevents_ch ch bs,
-          wpick.wp_cons b bs n (wevents_ch ch bs) hn1 hn2 (wpick_wevents ch bs hbs), ?_⟩
-        simpa only [List.append_assoc] using
-          is_prefix_trans h
-            (is_prefix_app (List.map (event.WriteEv ch) (b.take n))
-              (wevents_ch ch bs ++ [event.ExitEv code fs]))
-      · obtain ⟨full, hw, hp⟩ := (ih tr' hbs).1 hT
-        refine ⟨List.map (event.WriteEv ch) (b.take n) ++ full,
-          wpick.wp_cons b bs n full hn1 hn2 hw, ?_⟩
-        simpa only [List.append_assoc] using
-          is_prefix_app_mono (List.map (event.WriteEv ch) (b.take n)) tr'
-            (full ++ [event.ExitEv code fs]) hp
-    · rintro ⟨full, hw, hp⟩
-      cases hw with
-      | wp_cons b' bs' n tr0 hn1 hn2 hpick =>
-        have hp' : is_prefix tr
-            (List.map (event.WriteEv ch) (b.take n) ++ (tr0 ++ [event.ExitEv code fs])) := by
-          simpa only [List.append_assoc] using hp
-        rcases is_prefix_app_split (List.map (event.WriteEv ch) (b.take n))
-          (tr0 ++ [event.ExitEv code fs]) tr hp' with hp'' | ⟨tr', rfl, hp''⟩
-        · exact ⟨⟨n, hn1, hn2⟩, Or.inl hp''⟩
-        · exact ⟨⟨n, hn1, hn2⟩, Or.inr ⟨tr', rfl,
-            (ih tr' hbs).2 ⟨tr0, hpick, hp''⟩⟩⟩
-
 section AsanInitReal
 
 variable (segs : List Segment)
@@ -2127,3 +2076,4 @@ theorem asan_init_obs_iff (tr : List event) :
 end AsanInitReal
 
 end LinuxSem.Common.NoReserve
+

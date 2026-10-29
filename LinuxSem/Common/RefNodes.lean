@@ -92,6 +92,7 @@ import LinuxSem.EquivalenceDefinition.Equivalence
 import LinuxSem.Common.SimInv
 import LinuxSem.Common.ExitSim
 import LinuxSem.Common.PropExec
+import LinuxSem.Common.SharedFacts
 import LinuxSem.Common.CatExec
 import LinuxSem.Common.CatSim
 import LinuxSem.Common.SeqExec
@@ -128,6 +129,7 @@ open LinuxSem.Checks.ExecutableSpecs
 open LinuxSem.Checks.Sys.Prelude
 open LinuxSem.Common
 open LinuxSem.Common.PropExec
+open LinuxSem.Common.SharedFacts
 open LinuxSem.Common.SimInv
 open LinuxSem.Common.ExitSim
 open LinuxSem.Common.CatExec
@@ -144,6 +146,7 @@ open LinuxSem.Common.AsanCeil
 open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Mm.Mmap
 open LinuxSem.LinuxProcessSem.Sys.Mm.Mprotect
+open LinuxSem.LinuxProcessSem.Sys.Mm.Mremap
 
 /-- The `FPState` instance every state in this file runs under: the entry
     state, as everywhere else in `Common`. -/
@@ -1318,16 +1321,10 @@ theorem live_bytes_cons (a n : word) (l : List (word × word)) :
     LinuxSem.LinuxProcessSem.live_bytes ((a, n) :: l)
       = (n.toNat : Int) + LinuxSem.LinuxProcessSem.live_bytes l := rfl
 
-theorem live_bytes_app (l1 l2 : List (word × word)) :
-    LinuxSem.LinuxProcessSem.live_bytes (l1 ++ l2)
-      = LinuxSem.LinuxProcessSem.live_bytes l1
-        + LinuxSem.LinuxProcessSem.live_bytes l2 := by
-  induction l1 with
-  | nil => simp [LinuxSem.LinuxProcessSem.live_bytes]
-  | cons hd l1 ih =>
-    obtain ⟨a, n⟩ := hd
-    simp only [List.cons_append, LinuxSem.LinuxProcessSem.live_bytes, ih]
-    omega
+/- [live_bytes_app] — the append law for the ledger sum — is stated once, in
+   the spec layer: [LinuxSem.LinuxProcessSem.Sys.Mm.Mremap.live_bytes_app],
+   in scope here through the [open ... Sys.Mm.Mremap] above.  It is not
+   restated in this file. -/
 
 theorem live_bytes_nonneg (l : List (word × word)) :
     0 ≤ LinuxSem.LinuxProcessSem.live_bytes l := by
@@ -1365,15 +1362,6 @@ theorem maps_subtract_nil (lo hi : Int) : maps_subtract [] lo hi = [] := rfl
 theorem maps_subtract_cons (a sz : word) (lo hi : Int) (l : List (word × word)) :
     maps_subtract ((a, sz) :: l) lo hi = iv_subtract a sz lo hi ++ maps_subtract l lo hi :=
   rfl
-
-theorem maps_subtract_app (l1 l2 : List (word × word)) (lo hi : Int) :
-    maps_subtract (l1 ++ l2) lo hi
-      = maps_subtract l1 lo hi ++ maps_subtract l2 lo hi := by
-  induction l1 with
-  | nil => rfl
-  | cons hd l1 ih =>
-    obtain ⟨a, sz⟩ := hd
-    simp only [List.cons_append, maps_subtract, ih, List.append_assoc]
 
 /-- Subtracting a range that covers the interval removes it. -/
 theorem iv_subtract_covered (a sz : word) (lo hi : Int)
@@ -1794,6 +1782,45 @@ theorem region_free_of_noconflict (l : List (word × word)) (a n : Int)
       · rw [decide_eq_false_iff_not.mpr h1, Bool.false_and]
     rw [hov]
     rfl
+
+
+
+/-- An access-free instruction is a silent deterministic node on ANY model
+    (in particular with a non-empty lazy ledger: nothing is charged). -/
+theorem node_instr_noacc (segs : List Segment) (ms : machine_state) (model : Model)
+    (ms' : machine_state)
+    (Hh : m_halted model = none) (Hsvc : ms.ms_svc_pending = none)
+    (Hstep : step_accesses segs ms = .MachineOk (mkAccessReport ms' [])) :
+    node_ok segs (mkCfg ms model) Unit (fun _ => []) (fun _ => mkCfg ms' model) := by
+  have Hacc : mi_account_step segs ms model = .MachineOk (ms', model) := by
+    unfold mi_account_step
+    rw [Hstep]
+    dsimp only [mkAccessReport]
+    rw [materialize_model_accesses_nil]
+  constructor
+  · intro _
+    exact sstep.instr ms model ms' model Hh Hsvc Hacc
+  · intro e st hss
+    cases hss with
+    | instr ms0 model0 ms1 model1 hh hsvc hstep =>
+      rw [Hacc] at hstep
+      obtain ⟨rfl, rfl⟩ := hstep
+      exact ⟨(), rfl, rfl⟩
+    | instr_fault ms0 model0 hh hsvc hstep =>
+      rw [Hacc] at hstep; cases hstep
+    | instr_unmodeled ms0 model0 hh hsvc hstep =>
+      rw [Hacc] at hstep; cases hstep
+    | syscall ms0 model0 x8 eff m' m'' evs hh hsvc hspec hh' hmat =>
+      rw [Hsvc] at hsvc; cases hsvc
+    | syscall_materialization_fault ms0 model0 x8 eff m' evs hh hsvc hspec hh' hmat =>
+      rw [Hsvc] at hsvc; cases hsvc
+    | exit ms0 model0 x8 eff m' evs code hh hsvc hspec hh' hk =>
+      rw [Hsvc] at hsvc; cases hsvc
+    | killed ms0 model0 x8 eff m' evs sig hh hsvc hspec hk =>
+      rw [Hsvc] at hsvc; cases hsvc
+    | syscall_unmodeled ms0 model0 x8 hh hsvc hspec =>
+      rw [Hsvc] at hsvc; cases hsvc
+
 
 
 end LinuxSem.Common.RefNodes

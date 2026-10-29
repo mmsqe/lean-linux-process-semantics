@@ -55,7 +55,7 @@ open LinuxSem.LinuxProcessSem.Sys.Syscall
 open LinuxSem.LinuxProcessSem.Sys.Uapi
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
   (rw_bytes_max modeled_rw_count access_ok_zero)
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff lowest_fd)
+open LinuxSem.LinuxProcessSem.Sys.Fs.File (lowest_fd)
 open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite (UIO_FASTIOV)
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket
 open LinuxSem.Checks.Sys.Prelude
@@ -71,20 +71,13 @@ open LinuxSem.Checks.Sys.Uaccess (check_access_ok_zero)
   delivered prefix.  The parent file keeps its own copies of the first
   two under `private`, so they are restated here rather than imported. -/
 
-/-- `ret_only` at its own word — `pure_ok` through the
-    abbreviation, which `pure_ok` cannot see. -/
-private theorem send_ret_only_ok (r : word) (i : SyscallInput) (m : Model) :
-    ret_only r i m (.ok (mkEffect r [] []) m []) := by
-  unfold ret_only LinuxSem.LinuxProcessSem.pure
-  rfl
-
 /-- `record_copyins reads (ret_only r)` at its own accepted
     outcome: the ledger round the fixed return, at the same model. -/
 private theorem send_record_copyins_ret_only_ok (reads : List (word × Nat)) (r : word)
     (i : SyscallInput) (m : Model) :
     record_copyins reads (ret_only r) i m
       (.ok (with_copyins reads (mkEffect r [] [])) m []) :=
-  record_copyins_ok_empty rfl (send_ret_only_ok r i m)
+  record_copyins_ok_empty rfl (ret_only_ok r i m)
 
 /-- Invert that leaf.  The `-EPIPE`, `-EFAULT` and zero-length
     arms' spec stage covers exactly one outcome, so an accepted one names
@@ -110,7 +103,7 @@ private theorem send_seqSpec_set_fds_ret_only_ok (fds : List (word × FdEntry)) 
   refine ⟨(), with_fds fds m, [], [], ?_, ?_, by simp⟩
   · unfold set_fds modifySpec LinuxSem.LinuxProcessSem.modify
     rfl
-  · exact send_ret_only_ok r i _
+  · exact ret_only_ok r i _
 
 /-- The delivered-prefix leaf, at its own accepted outcome:
     the emitted trace is the delivered bytes' events and the ledger is the
@@ -120,7 +113,7 @@ private theorem send_seqSpec_emit_record_ret_only_ok (evs0 : List event)
     seqSpec (emit evs0) (record_copyins reads (ret_only r)) i m
       (.ok (with_copyins reads (mkEffect r [] [])) m evs0) := by
   refine ⟨(), m, evs0, [], rfl, ?_, by simp⟩
-  exact record_copyins_ok_empty rfl (send_ret_only_ok r i _)
+  exact record_copyins_ok_empty rfl (ret_only_ok r i _)
 
 /-- Invert the delivered-prefix leaf: the emitted trace is the
     event list handed in, the model is untouched, and the effect is the
@@ -599,36 +592,10 @@ theorem check_send_on_socket_complete_ok (pre : List (word × Nat))
 
   `-EBADF`, `-ENOTSOCK` and `import_ubuf`'s -EFAULT all answer through
   `check_ret_only` against the spec's `err_ret`, and the socket arm is the
-  shared send body.  The parent file carries the first two as `arm_ok` /
-  `arm_check_ok`; they are `private` there, so they are restated here. -/
-
-/-- Checker → spec, for one arm answering through
-    `check_ret_only`: an accepted `check_ret_only` IS the spec's
-    `ret_only` at that word, at the claimed model and events. -/
-private theorem send_arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨heff, hm, hevs⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  rw [heff, hm, hevs]
-  exact send_ret_only_ok r i m
-
-/-- Spec → checker for the same arm. -/
-private theorem send_arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  cases H
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- `ret_only` never declines — `err_ret` is one, so this is
-    what refutes every errno arm of a `complete_unmodeled` walk. -/
-private theorem send_ret_only_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  unfold ret_only LinuxSem.LinuxProcessSem.pure at H
-  exact nomatch H
+  shared send body.  The first two are the public `arm_ok` / `arm_check_ok`
+  of `Checks.Sys.Prelude`, opened at the top of this file and cited directly
+  (the two statements that used to be restated here under a `send_` prefix
+  are theirs verbatim). -/
 
 /-- The `import_ubuf` verdict, and the fd INSIDE it.  The checker's
     `check_access_ok_zero` against the spec's `access_ok_zero`: the range
@@ -658,16 +625,16 @@ private theorem sendto_body_sound_ok (fd buf count : word) (eff : SyscallEffect)
   · simp only [hok, ite_true] at H ⊢
     generalize hfd : fd_lookup (m_fds m) fd = ent at H ⊢
     cases ent with
-    | none => exact send_arm_ok (errno_ret EBADF) eff m m' evs i H
+    | none => exact arm_ok (errno_ret EBADF) eff m m' evs i H
     | some e =>
       cases e <;>
         (simp only [] at H ⊢
          first
         | exact check_send_on_socket_sound_ok [] (fun n => [(buf, n)]) fd _
             count (readable_bytes i.in_mem buf count) eff m m' evs i H
-         | exact send_arm_ok (errno_ret ENOTSOCK) eff m m' evs i H)
+         | exact arm_ok (errno_ret ENOTSOCK) eff m m' evs i H)
   · simp only [hok, Bool.false_eq_true, ite_false] at H ⊢
-    exact send_arm_ok (errno_ret EFAULT) eff m m' evs i H
+    exact arm_ok (errno_ret EFAULT) eff m m' evs i H
 
 /-- Soundness on accepted outcomes: whatever `check_sendto` accepts, the
     relational `sendto_spec` admits.  The walk is the kernel's own order —
@@ -775,16 +742,16 @@ theorem check_sendto_complete_ok (i : SyscallInput)
         · simp only [hok, ite_true] at H ⊢
           generalize hfd : fd_lookup (m_fds m) fd = ent at H ⊢
           cases ent with
-          | none => exact send_arm_check_ok (errno_ret EBADF) eff m m' evs i H
+          | none => exact arm_check_ok (errno_ret EBADF) eff m m' evs i H
           | some e =>
             cases e <;>
               (simp only [] at H ⊢
                first
               | exact check_send_on_socket_complete_ok [] (fun n => [(buf, n)]) fd _
                   count (readable_bytes i.in_mem buf count) eff m m' evs i H
-               | exact send_arm_check_ok (errno_ret ENOTSOCK) eff m m' evs i H)
+               | exact arm_check_ok (errno_ret ENOTSOCK) eff m m' evs i H)
         · simp only [hok, Bool.false_eq_true, ite_false] at H ⊢
-          exact send_arm_check_ok (errno_ret EFAULT) eff m m' evs i H
+          exact arm_check_ok (errno_ret EFAULT) eff m m' evs i H
 
 /-- Completeness on declines: wherever `sendto_spec` fails closed, so does
     `check_sendto`.  The three gates answer `rfl`; past them only the
@@ -820,16 +787,16 @@ theorem check_sendto_complete_unmodeled (i : SyscallInput)
           generalize hfd : fd_lookup (m_fds m) fd = ent at H ⊢
           cases ent with
           | none =>
-            exact absurd H (send_ret_only_ne_unmodeled (errno_ret EBADF) i m)
+            exact absurd H (ret_only_ne_unmodeled (errno_ret EBADF) i m)
           | some e =>
             cases e <;>
               (simp only [] at H ⊢
                first
               | exact absurd H (send_on_socket_no_unmodeled [] (fun n => [(buf, n)]) fd _
                   count (readable_bytes i.in_mem buf count) m i)
-               | exact absurd H (send_ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m))
+               | exact absurd H (ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m))
         · simp only [hok, Bool.false_eq_true, ite_false] at H ⊢
-          exact absurd H (send_ret_only_ne_unmodeled (errno_ret EFAULT) i m)
+          exact absurd H (ret_only_ne_unmodeled (errno_ret EFAULT) i m)
 
 /- =========================================================================
    sendmsg (211)
@@ -982,29 +949,6 @@ private def sendmsg_spec_all (i : SyscallInput) (fd msgp : word)
       err_ret ENOTSOCK
   | some (FdEntry.FdSocket sk) => sendmsg_spec_body i fd msgp sk m
 
-/-- A `check_ret_only_copyins` leaf is exactly the spec's
-    `record_copyins reads (ret_only r)` — the shape `-EMSGSIZE`,
-    `-EFAULT` and `-EINVAL` all answer through here, with the ledger the
-    arm really read. -/
-private theorem sendmsg_leaf_sound_ok (reads : List (word × Nat)) (r : word)
-    (eff : SyscallEffect) (m m' : Model) (evs : List event) (i : SyscallInput)
-    (H : check_ret_only_copyins reads eff r m [] = .CheckOk m' evs) :
-    record_copyins reads (ret_only r) i m (.ok eff m' evs) := by
-  obtain ⟨heff, hm, hevs⟩ :=
-    (check_ret_only_copyins_ok_iff reads eff r m [] m' evs).mp H
-  rw [heff, hm, hevs]
-  exact record_copyins_ok_empty rfl (send_ret_only_ok r i m)
-
-/-- And its inverse. -/
-private theorem sendmsg_leaf_complete_ok (reads : List (word × Nat)) (r : word)
-    (eff : SyscallEffect) (m m' : Model) (evs : List event) (i : SyscallInput)
-    (H : record_copyins reads (ret_only r) i m (.ok eff m' evs)) :
-    check_ret_only_copyins reads eff r m [] = .CheckOk m' evs := by
-  obtain ⟨heff, hm, hevs⟩ :=
-    send_record_copyins_ret_only_ok_inv reads r i m eff m' evs H
-  rw [heff, hm, hevs]
-  exact check_ret_only_copyins_refl reads r m []
-
 /-- The socket arm, accepted outcomes.  The header read decides -EFAULT on
     both sides; the six field reads are then peeled ONE AT A TIME, and the
     six shapes that are not all-`some` are the total-match -EFAULT arm the
@@ -1022,44 +966,44 @@ private theorem sendmsg_socket_sound_ok (i : SyscallInput) (fd msgp : word)
   cases rb with
   | none =>
     simp only [] at H ⊢
-    exact send_arm_ok (errno_ret EFAULT) eff m m' evs i H
+    exact arm_ok (errno_ret EFAULT) eff m m' evs i H
   | some hdr =>
     simp only [] at H ⊢
     generalize h0 : read_u64 i.in_mem msgp = r0 at H ⊢
     cases r0 with
     | none =>
       simp only [] at H ⊢
-      exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+      exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
     | some name =>
       generalize h1 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 8) = r1 at H ⊢
       cases r1 with
       | none =>
         simp only [] at H ⊢
-        exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+        exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
       | some namelen =>
         generalize h2 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 16) = r2 at H ⊢
         cases r2 with
         | none =>
           simp only [] at H ⊢
-          exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+          exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
         | some iov =>
           generalize h3 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 24) = r3 at H ⊢
           cases r3 with
           | none =>
             simp only [] at H ⊢
-            exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+            exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
           | some iovlen =>
             generalize h4 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 32) = r4 at H ⊢
             cases r4 with
             | none =>
               simp only [] at H ⊢
-              exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+              exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
             | some ctl =>
               generalize h5 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 40) = r5 at H ⊢
               cases r5 with
               | none =>
                 simp only [] at H ⊢
-                exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+                exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
               | some ctllen =>
                 simp only [] at H ⊢
                 by_cases hn : (!(w_is0 name)) = true
@@ -1068,7 +1012,7 @@ private theorem sendmsg_socket_sound_ok (i : SyscallInput) (fd msgp : word)
                 · simp only [hn, Bool.false_eq_true, ite_false] at H ⊢
                   by_cases hiv : decide (IOV_MAX < (iovlen.toNat : Int)) = true
                   · simp only [hiv, ite_true] at H ⊢
-                    exact sendmsg_leaf_sound_ok _ (errno_ret EMSGSIZE) eff m m' evs i H
+                    exact arm_copyins_ok _ (errno_ret EMSGSIZE) eff m m' evs i H
                   · simp only [hiv, Bool.false_eq_true, ite_false] at H ⊢
                     by_cases hfa : decide (UIO_FASTIOV < (iovlen.toNat : Int)) = true
                     · simp only [hfa, ite_true] at H ⊢
@@ -1078,10 +1022,10 @@ private theorem sendmsg_socket_sound_ok (i : SyscallInput) (fd msgp : word)
                       cases ci with
                       | ImpFault =>
                         simp only [] at H ⊢
-                        exact sendmsg_leaf_sound_ok _ (errno_ret EFAULT) eff m m' evs i H
+                        exact arm_copyins_ok _ (errno_ret EFAULT) eff m m' evs i H
                       | ImpInval =>
                         simp only [] at H ⊢
-                        exact sendmsg_leaf_sound_ok _ (errno_ret EINVAL) eff m m' evs i H
+                        exact arm_copyins_ok _ (errno_ret EINVAL) eff m m' evs i H
                       | ImpOk iovs0 =>
                         simp only [] at H ⊢
                         by_cases hcl : (!(w_is0 ctllen)) = true
@@ -1194,7 +1138,7 @@ private theorem sendmsg_socket_sound_unmodeled (i : SyscallInput) (fd msgp : wor
 /-- The socket arm, admitted outcomes: every shape `sendmsg_spec` can take
     here, inverted.  The two import errnos carry the header AND the
     descriptors `copy_iovecs_accesses` walked, which is why their leaves
-    are stated at `sendmsg_leaf_complete_ok`'s general `reads`. -/
+    are stated at `arm_copyins_check_ok`'s general `reads`. -/
 private theorem sendmsg_socket_complete_ok (i : SyscallInput) (fd msgp : word)
     (sk : SockState) (eff : SyscallEffect) (m m' : Model) (evs : List event)
     (H : sendmsg_spec_body i fd msgp sk m i m (.ok eff m' evs)) :
@@ -1205,44 +1149,44 @@ private theorem sendmsg_socket_complete_ok (i : SyscallInput) (fd msgp : word)
   cases rb with
   | none =>
     simp only [] at H ⊢
-    exact send_arm_check_ok (errno_ret EFAULT) eff m m' evs i H
+    exact arm_check_ok (errno_ret EFAULT) eff m m' evs i H
   | some hdr =>
     simp only [] at H ⊢
     generalize h0 : read_u64 i.in_mem msgp = r0 at H ⊢
     cases r0 with
     | none =>
       simp only [] at H ⊢
-      exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+      exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
     | some name =>
       generalize h1 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 8) = r1 at H ⊢
       cases r1 with
       | none =>
         simp only [] at H ⊢
-        exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+        exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
       | some namelen =>
         generalize h2 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 16) = r2 at H ⊢
         cases r2 with
         | none =>
           simp only [] at H ⊢
-          exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+          exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
         | some iov =>
           generalize h3 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 24) = r3 at H ⊢
           cases r3 with
           | none =>
             simp only [] at H ⊢
-            exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+            exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
           | some iovlen =>
             generalize h4 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 32) = r4 at H ⊢
             cases r4 with
             | none =>
               simp only [] at H ⊢
-              exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+              exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
             | some ctl =>
               generalize h5 : read_u64 i.in_mem (msgp + BitVec.ofInt 64 40) = r5 at H ⊢
               cases r5 with
               | none =>
                 simp only [] at H ⊢
-                exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+                exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
               | some ctllen =>
                 simp only [] at H ⊢
                 by_cases hn : (!(w_is0 name)) = true
@@ -1251,7 +1195,7 @@ private theorem sendmsg_socket_complete_ok (i : SyscallInput) (fd msgp : word)
                 · simp only [hn, Bool.false_eq_true, ite_false] at H ⊢
                   by_cases hiv : decide (IOV_MAX < (iovlen.toNat : Int)) = true
                   · simp only [hiv, ite_true] at H ⊢
-                    exact sendmsg_leaf_complete_ok _ (errno_ret EMSGSIZE) eff m m' evs i H
+                    exact arm_copyins_check_ok _ (errno_ret EMSGSIZE) eff m m' evs i H
                   · simp only [hiv, Bool.false_eq_true, ite_false] at H ⊢
                     by_cases hfa : decide (UIO_FASTIOV < (iovlen.toNat : Int)) = true
                     · simp only [hfa, ite_true] at H ⊢
@@ -1261,10 +1205,10 @@ private theorem sendmsg_socket_complete_ok (i : SyscallInput) (fd msgp : word)
                       cases ci with
                       | ImpFault =>
                         simp only [] at H ⊢
-                        exact sendmsg_leaf_complete_ok _ (errno_ret EFAULT) eff m m' evs i H
+                        exact arm_copyins_check_ok _ (errno_ret EFAULT) eff m m' evs i H
                       | ImpInval =>
                         simp only [] at H ⊢
-                        exact sendmsg_leaf_complete_ok _ (errno_ret EINVAL) eff m m' evs i H
+                        exact arm_copyins_check_ok _ (errno_ret EINVAL) eff m m' evs i H
                       | ImpOk iovs0 =>
                         simp only [] at H ⊢
                         by_cases hcl : (!(w_is0 ctllen)) = true
@@ -1290,7 +1234,7 @@ private theorem sendmsg_socket_complete_unmodeled (i : SyscallInput) (fd msgp : 
   cases rb with
   | none =>
     simp only [] at H ⊢
-    exact absurd H (send_ret_only_ne_unmodeled (errno_ret EFAULT) i m)
+    exact absurd H (ret_only_ne_unmodeled (errno_ret EFAULT) i m)
   | some hdr =>
     simp only [] at H ⊢
     generalize h0 : read_u64 i.in_mem msgp = r0 at H ⊢
@@ -1386,13 +1330,13 @@ private theorem sendmsg_all_sound_ok (i : SyscallInput) (fd msgp : word)
   unfold sendmsg_spec_all
   generalize hfd : fd_lookup (m_fds m) fd = ent at H ⊢
   cases ent with
-  | none => exact send_arm_ok (errno_ret EBADF) eff m m' evs i H
+  | none => exact arm_ok (errno_ret EBADF) eff m m' evs i H
   | some e =>
     cases e <;>
       (simp only [] at H ⊢
        first
        | exact sendmsg_socket_sound_ok i fd msgp _ eff m m' evs H
-       | exact send_arm_ok (errno_ret ENOTSOCK) eff m m' evs i H)
+       | exact arm_ok (errno_ret ENOTSOCK) eff m m' evs i H)
 
 private theorem sendmsg_all_sound_unmodeled (i : SyscallInput) (fd msgp : word)
     (eff : SyscallEffect) (m : Model)
@@ -1419,13 +1363,13 @@ private theorem sendmsg_all_complete_ok (i : SyscallInput) (fd msgp : word)
   unfold sendmsg_spec_all at H
   generalize hfd : fd_lookup (m_fds m) fd = ent at H ⊢
   cases ent with
-  | none => exact send_arm_check_ok (errno_ret EBADF) eff m m' evs i H
+  | none => exact arm_check_ok (errno_ret EBADF) eff m m' evs i H
   | some e =>
     cases e <;>
       (simp only [] at H ⊢
        first
        | exact sendmsg_socket_complete_ok i fd msgp _ eff m m' evs H
-       | exact send_arm_check_ok (errno_ret ENOTSOCK) eff m m' evs i H)
+       | exact arm_check_ok (errno_ret ENOTSOCK) eff m m' evs i H)
 
 private theorem sendmsg_all_complete_unmodeled (i : SyscallInput) (fd msgp : word)
     (m : Model) (eff : SyscallEffect)
@@ -1436,13 +1380,13 @@ private theorem sendmsg_all_complete_unmodeled (i : SyscallInput) (fd msgp : wor
   generalize hfd : fd_lookup (m_fds m) fd = ent at H ⊢
   cases ent with
   | none =>
-    exact absurd H (send_ret_only_ne_unmodeled (errno_ret EBADF) i m)
+    exact absurd H (ret_only_ne_unmodeled (errno_ret EBADF) i m)
   | some e =>
     cases e <;>
       (simp only [] at H ⊢
        first
        | exact sendmsg_socket_complete_unmodeled i fd msgp _ m eff H
-       | exact absurd H (send_ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m))
+       | exact absurd H (ret_only_ne_unmodeled (errno_ret ENOTSOCK) i m))
 
 /-- Soundness on accepted outcomes: whatever `check_sendmsg` accepts, the
     relational `sendmsg_spec` admits.  The flag gate first, then the
@@ -1517,3 +1461,7 @@ theorem check_sendmsg_complete_unmodeled (i : SyscallInput) (fd msgp flags : wor
     exact sendmsg_all_complete_unmodeled i fd msgp m eff Hs
 
 end LinuxSem.Checks.Sys.Net.Socket
+
+
+
+

@@ -1570,31 +1570,6 @@ theorem check_writev_complete_unmodeled (i : SyscallInput) (fd iov iovcnt : word
    readv_imported (the acceptor of `ReadWrite.readv_imported`)
    ========================================================================= -/
 
-/-- The channel readv's delivery stage, with the vectored ledger
-    (`set_stdin` + per-byte events + the arbitrary write list). -/
-private theorem seqSpec_set_stdin_deliver_writes (stdin : InputStream) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput)
-    (m : Model) :
-    seqSpec (set_stdin stdin)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m
-      (.ok (mkEffect (len_word bs) writes []) (with_stdin stdin m)
-        (bs.map (event.ReadEv ch))) := by
-  refine ⟨(), with_stdin stdin m, [], bs.map (event.ReadEv ch), rfl, ?_, rfl⟩
-  refine ⟨(), with_stdin stdin m, bs.map (event.ReadEv ch), [], rfl, rfl, by simp⟩
-
-/-- The same on a socket's descriptor table. -/
-private theorem seqSpec_set_fds_deliver_writes (fds : List (word × FdEntry))
-    (ch : word) (writes : List (word × List byte)) (bs : List byte)
-    (i : SyscallInput) (m : Model) :
-    seqSpec (set_fds fds)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m
-      (.ok (mkEffect (len_word bs) writes []) (with_fds fds m)
-        (bs.map (event.ReadEv ch))) := by
-  refine ⟨(), with_fds fds m, [], bs.map (event.ReadEv ch), rfl, ?_, rfl⟩
-  refine ⟨(), with_fds fds m, bs.map (event.ReadEv ch), [], rfl, rfl, by simp⟩
-
 theorem check_readv_imported_sound_ok (i : SyscallInput) (fd : word)
     (e : ReadableFd) (iovs : List (word × word)) (eff : SyscallEffect)
     (m m' : Model) (evs : List event)
@@ -2533,46 +2508,6 @@ private theorem wv_readv_gap_no_ok (i : SyscallInput) (m : Model)
   unfold readv_buf_gap LinuxSem.LinuxProcessSem.unmodeled at H
   exact nomatch H
 
-/-- Invert the channel delivery stage of a vectored read. -/
-private theorem wv_stdin_deliver_writes_inv (stdin : InputStream) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput)
-    (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (set_stdin stdin)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m (.ok eff m' evs)) :
-    eff = mkEffect (len_word bs) writes [] ∧ m' = with_stdin stdin m ∧
-      evs = bs.map (event.ReadEv ch) := by
-  obtain ⟨u, m1, ev1, ev2, h1, h2, h3⟩ := H
-  simp only [set_stdin, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
-  cases h1
-  obtain ⟨y, m2, ev3, ev4, h4, h5, h6⟩ := h2
-  cases h4
-  cases h5
-  simp only [List.nil_append, List.append_nil] at h3 h6
-  cases h6
-  cases h3
-  exact ⟨rfl, rfl, rfl⟩
-
-/-- The same on a socket's descriptor table. -/
-private theorem wv_fds_deliver_writes_inv (fds : List (word × FdEntry)) (ch : word)
-    (writes : List (word × List byte)) (bs : List byte) (i : SyscallInput)
-    (m : Model) (eff : SyscallEffect) (m' : Model) (evs : List event)
-    (H : seqSpec (set_fds fds)
-      (seqSpec (emit (bs.map (event.ReadEv ch)))
-        (pure (mkEffect (len_word bs) writes []))) i m (.ok eff m' evs)) :
-    eff = mkEffect (len_word bs) writes [] ∧ m' = with_fds fds m ∧
-      evs = bs.map (event.ReadEv ch) := by
-  obtain ⟨u, m1, ev1, ev2, h1, h2, h3⟩ := H
-  simp only [set_fds, modifySpec, LinuxSem.LinuxProcessSem.modify] at h1
-  cases h1
-  obtain ⟨y, m2, ev3, ev4, h4, h5, h6⟩ := h2
-  cases h4
-  cases h5
-  simp only [List.nil_append, List.append_nil] at h3 h6
-  cases h6
-  cases h3
-  exact ⟨rfl, rfl, rfl⟩
-
 theorem check_readv_imported_complete_ok (i : SyscallInput) (fd : word)
     (e : ReadableFd) (iovs : List (word × word)) (eff : SyscallEffect)
     (m m' : Model) (evs : List event)
@@ -2870,3 +2805,7 @@ theorem check_readv_imported_complete_ok (i : SyscallInput) (fd : word)
       exact False.elim (wv_readv_gap_no_ok i m eff m' evs Hs)
 
 end LinuxSem.Checks.Sys.Fs.ReadWrite
+
+
+
+

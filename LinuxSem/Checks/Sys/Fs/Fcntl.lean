@@ -31,10 +31,10 @@
   it and leaves the fd match.
 
   Every answered arm answers through `check_ret_only` at one word while the
-  spec's matching arm is `ret_only`/`err_ret` at the same word, so the
-  `check_ret_only_ok_iff` step is stated once below as `arm_ok`,
-  `arm_check_ok` and `arm_ne_unmodeled` — private helpers with no public
-  surface, and the same three the `Ioctl` and `Sync` checkers carry.
+  spec's matching arm is `ret_only`/`err_ret` at the same word; the
+  `check_ret_only_ok_iff` step itself is the shared `arm_ok` /
+  `arm_check_ok` (see `Checks.Sys.Prelude`), and only `ret_only_ne_unmodeled`
+  stays local below.
 -/
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Fs.Fcntl
@@ -76,38 +76,15 @@ def check_fcntl (fd cmd arg : word) (eff : SyscallEffect) (m : Model)
       else .CheckUnmodeled
 
 /- =========================================================================
-   Private helpers: the one-word arm correspondence
+   A private helper: the `unmodeled` side
 
    `check_fcntl` accepts exactly four words — `errno_ret EBADF`, 0 (twice)
-   and `fl` — and each is the spec's `ret_only` at the same word.  The
-   four theorems would spell the `check_ret_only_ok_iff` inversion out in
-   every branch; here it is done twice.
+   and `fl` — and each is the spec's `ret_only` at the same word.  That
+   `check_ret_only_ok_iff` inversion in both directions is the canonical
+   `arm_ok` / `arm_check_ok` (see `Checks.Sys.Prelude`); the exclusion the
+   arms then use is the shared `ret_only_ne_unmodeled` of that same
+   `prelude`.
    ========================================================================= -/
-
-/-- Checker → spec, for one arm: an accepted `check_ret_only` *is* the
-    spec's `ret_only` at that word, with the claimed model and events. -/
-private theorem arm_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : check_ret_only eff r m [] = .CheckOk m' evs) :
-    ret_only r i m (.ok eff m' evs) := by
-  obtain ⟨rfl, rfl, rfl⟩ := (check_ret_only_ok_iff eff r m [] m' evs).mp H
-  exact pure_ok _ i _
-
-/-- Spec → checker, for one arm: an outcome of the spec's `ret_only` at
-    that word is accepted by `check_ret_only` at the same word. -/
-private theorem arm_check_ok (r : word) (eff : SyscallEffect) (m m' : Model)
-    (evs : List event) (i : SyscallInput)
-    (H : ret_only r i m (.ok eff m' evs)) :
-    check_ret_only eff r m [] = .CheckOk m' evs := by
-  obtain ⟨rfl, rfl, rfl⟩ := H
-  simp [check_ret_only, bv_eqb_refl]
-
-/-- No `ret_only` (hence no `err_ret`) answers `unmodeled`: the only
-    outcome shape of `pure` is `.ok … []`. -/
-private theorem arm_ne_unmodeled (r : word) (i : SyscallInput) (m : Model) :
-    ¬ ret_only r i m .unmodeled := by
-  intro H
-  exact nomatch H
 
 /- =========================================================================
    The four lemmas
@@ -240,23 +217,23 @@ theorem check_fcntl_complete_unmodeled (fd cmd arg : word) (m : Model)
   cases e with
   | none =>
     dsimp only at H ⊢
-    exact absurd H (arm_ne_unmodeled _ i m)
+    exact absurd H (ret_only_ne_unmodeled _ i m)
   | some e =>
     dsimp only at H ⊢
     by_cases hd : bv_eqb cmd F_SETFD = true
     · simp only [ite_eq_left hd] at H ⊢
-      exact absurd H (arm_ne_unmodeled _ i m)
+      exact absurd H (ret_only_ne_unmodeled _ i m)
     · simp only [ite_eq_right hd] at H ⊢
       by_cases hl : (bv_eqb cmd F_SETFL && setfl_noop_on e arg) = true
       · simp only [ite_eq_left hl] at H ⊢
-        exact absurd H (arm_ne_unmodeled _ i m)
+        exact absurd H (ret_only_ne_unmodeled _ i m)
       · simp only [ite_eq_right hl] at H ⊢
         by_cases hg : bv_eqb cmd F_GETFL = true
         · simp only [ite_eq_left hg] at H ⊢
           generalize hfl : getfl_f_flags e = fl at H ⊢
           cases fl with
           | none => rfl
-          | some fl => exact absurd H (arm_ne_unmodeled _ i m)
+          | some fl => exact absurd H (ret_only_ne_unmodeled _ i m)
         · simp only [ite_eq_right hg] at H ⊢
 
 /- =========================================================================
@@ -280,7 +257,7 @@ private def demoModel : Model :=
     [(BitVec.ofNat 64 3, FdEntry.FdFile [] (BitVec.ofInt 64 0)),
      (BitVec.ofNat 64 4, FdEntry.FdPipe (BitVec.ofNat 64 0) false),
      (BitVec.ofNat 64 5, FdEntry.FdSocket SockState.SkFresh)]
-    (mkVmMaps [] [] 0 0 0) IEof [] none none none
+    (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The fd table, without unfolding the whole `Model` (whose `NetStream`
     field has no decidable equality). -/
@@ -417,3 +394,4 @@ example : errno_ret EBADF = BitVec.ofInt 64 (-9) := by decide
 example : O_RDWR = 2 := by decide
 
 end LinuxSem.Checks.Sys.Fs.Fcntl
+

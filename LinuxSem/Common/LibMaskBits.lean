@@ -87,12 +87,6 @@ private theorem toNat_int_two_pow_sub_one (n : Nat) : ((2 : Int) ^ n - 1).toNat 
     (Int.natCast_sub (Nat.one_le_two_pow)).symm
   rw [h, Int.toNat_natCast]
 
-/-- `toNat` of a `Z_to_bv 64` literal, for a non-negative one. -/
-private theorem toNat_ofInt_64 (z : Int) (h0 : 0 ≤ z) (h1 : z < 2 ^ 64) :
-    (BitVec.ofInt 64 z).toNat = z.toNat := by
-  rw [BitVec.toNat_ofInt,
-    Int.emod_eq_of_lt (b := ((2 ^ 64 : Nat) : Int)) h0 (by omega)]
-
 /-- The same for a NEGATIVE literal: the 64-bit wrap is `z + 2^64`. -/
 private theorem toNat_ofInt_64_neg (z : Int) (h0 : -(2 : Int) ^ 64 < z) (h1 : z < 0) :
     (BitVec.ofInt 64 z).toNat = (z + 2 ^ 64).toNat := by
@@ -398,7 +392,7 @@ theorem u_lw_lo (a : Int) (Ha : 0 ≤ a ∧ a < 2 ^ 31) :
   unfold v_lw
   rw [u_Z2bv a Ha.1 h64]
   rcases swrap32_cases a ⟨Ha.1, by omega⟩ with ⟨_, HE⟩ | ⟨Hge, _⟩
-  · rw [HE, toNat_ofInt_64 a Ha.1 h64, Int.toNat_of_nonneg Ha.1]
+  · rw [HE, toNat_ofInt_of_range a Ha.1 h64, Int.toNat_of_nonneg Ha.1]
   · omega
 
 theorem u_lw_hi (a : Int) (Ha : 2 ^ 31 ≤ a ∧ a < (2 : Int) ^ 32) :
@@ -418,7 +412,7 @@ theorem u_sllw1 (idx : Int) (Hi : 0 ≤ idx ∧ idx ≤ 31) :
       if idx = 31 then 2 ^ 31 + 2 ^ 32 * (2 ^ 32 - 1) else (2 : Int) ^ idx.toNat := by
   have hidx : idx < 2 ^ 64 := by omega
   unfold v_sllw zshiftl
-  rw [toNat_ofInt_64 1 (by decide) (by decide), toNat_ofInt_64 idx Hi.1 hidx,
+  rw [toNat_ofInt_of_range 1 (by decide) (by decide), toNat_ofInt_of_range idx Hi.1 hidx,
     show idx.toNat % 32 = idx.toNat from Nat.mod_eq_of_lt (by omega),
     show (((1 : Int).toNat : Int)) = 1 from rfl, Int.one_mul]
   by_cases h : idx = 31
@@ -447,7 +441,7 @@ theorem u_sllw1 (idx : Int) (Hi : 0 ≤ idx ∧ idx ≤ 31) :
           calc ((2 ^ idx.toNat : Nat) : Int) < ((2 ^ 31 : Nat) : Int) := hlt31
             _ < ((2 ^ 32 : Nat) : Int) := by decide⟩ with ⟨Hlt, HE⟩ | ⟨Hge, _⟩
     · have HE' : bv_swrap 32 (((2 ^ idx.toNat : Nat)) : Int) = ((2 ^ idx.toNat : Nat) : Int) := HE
-      rw [HE', toNat_ofInt_64 ((2 ^ idx.toNat : Nat) : Int) (int_two_pow_nonneg _) (by
+      rw [HE', toNat_ofInt_of_range ((2 ^ idx.toNat : Nat) : Int) (int_two_pow_nonneg _) (by
         have h2 : (2 : Nat) ^ idx.toNat < 2 ^ 64 := by
           calc (2 : Nat) ^ idx.toNat ≤ 2 ^ 30 := Nat.pow_le_pow_right (by decide) (by omega)
             _ < 2 ^ 64 := by decide
@@ -602,14 +596,9 @@ theorem c_ltu_Z (x y : Int) (Hx : 0 ≤ x ∧ x < (2 : Int) ^ 64)
     (Hy : 0 ≤ y ∧ y < (2 : Int) ^ 64) :
     c_ltu (BitVec.ofInt 64 x) (BitVec.ofInt 64 y) = decide (x < y) := by
   unfold c_ltu bv_ltu
-  rw [toNat_ofInt_64 x Hx.1 Hx.2, toNat_ofInt_64 y Hy.1 Hy.2]
+  rw [toNat_ofInt_of_range x Hx.1 Hx.2, toNat_ofInt_of_range y Hy.1 Hy.2]
   exact decide_eq_decide.mpr (by omega)
 
-/-- Z_to_bv 64 absorbs multiples of 2^64 (for "negative literal" immediates). -/
-theorem Z_to_bv_mod64 (z : Int) :
-    BitVec.ofInt 64 z = BitVec.ofInt 64 (z % ((2 ^ 64 : Nat) : Int)) := by
-  apply BitVec.eq_of_toNat_eq
-  rw [BitVec.toNat_ofInt, BitVec.toNat_ofInt]
-  exact congrArg Int.toNat (Int.emod_emod z _).symm
-
 end LinuxSem.Common.LibMaskBits
+
+

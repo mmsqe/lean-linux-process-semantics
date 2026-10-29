@@ -1195,12 +1195,6 @@ theorem bytes_le_to_Z_range (bs : List byte) (Hl : bs.length = 8) :
   have h := HZ.zdig_lt _ hF
   rwa [List.length_map, Hl] at h
 
-/-- `BitVec.ofInt` at a value already in range: the `Int` `toNat` is the
-    value itself. -/
-theorem toNat_ofInt_of_range (z : Int) (h0 : 0 ≤ z) (h1 : z < 2 ^ 64) :
-    (BitVec.ofInt 64 z).toNat = z.toNat := by
-  rw [BitVec.toNat_ofInt, Int.emod_eq_of_lt h0 (by rw [Int.natCast_pow]; exact h1)]
-
 /-- `z < 2^64` from its `Nat` representative (for `0 <= z`). -/
 theorem lt_two_pow_of_toNat_lt {z : Int} (h0 : 0 ≤ z) (h : z.toNat < 2 ^ 64) :
     z < 2 ^ 64 := by
@@ -1489,3 +1483,4 @@ theorem argv_word_readable (ph : PhdrInfo) (segs : List Segment) (sp : word)
   · rw [Hu]; omega
 
 end ArgvStack
+

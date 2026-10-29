@@ -110,7 +110,7 @@ private def demoModel : Model :=
     [(BitVec.ofNat 64 3, FdEntry.FdFile [] (BitVec.ofInt 64 0)),
      (BitVec.ofNat 64 4, FdEntry.FdPipe (BitVec.ofNat 64 0) false),
      (BitVec.ofNat 64 5, FdEntry.FdSocket SockState.SkFresh)]
-    (mkVmMaps [] [] 0 0 0) IEof [] none none none
+    (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- The fd table, without unfolding the whole `Model` (whose `NetStream`
     field has no decidable equality). -/

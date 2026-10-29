@@ -220,11 +220,6 @@ theorem check_sched_yield_frame (eff : SyscallEffect) (m m' : Model) (evs : List
     m_vmmaps m' = m_vmmaps m := by
   vm_frame eff H LinuxSem.Checks.Sys.Kernel.Sched.Syscalls.check_sched_yield LinuxSem.Checks.Sys.Prelude.check_ret_only
 
-theorem check_tkill_frame (pid sig : word) (eff : SyscallEffect) (m m' : Model) (evs : List event)
-    (H : check_tkill pid sig eff m = .CheckOk m' evs) :
-    m_vmmaps m' = m_vmmaps m := by
-  vm_frame eff H LinuxSem.Checks.Sys.Kernel.Signal.check_tkill LinuxSem.Checks.Sys.Prelude.check_ret_only LinuxSem.Checks.Sys.Kernel.Signal.check_send_sigabrt LinuxSem.Checks.Sys.Kernel.Signal.check_tkill_self
-
 theorem check_setid_frame (get : Creds → IdTriple) (put : IdTriple → Creds → Creds) (user : Bool) (v : word) (eff : SyscallEffect) (m m' : Model) (evs : List event)
     (H : check_setid get put user v eff m = .CheckOk m' evs) :
     m_vmmaps m' = m_vmmaps m := by
@@ -820,6 +815,7 @@ theorem check_getgroups_frame (gidsetsize : word) (eff : SyscallEffect) (m m' : 
               contradiction)
 
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
+
 /-- `setsockopt`'s frame: `sock_fd` answers the errno, the level gate
     answers `-ENOPROTOOPT`, and the rest declines.  No arm touches the
     ledger. -/
@@ -1217,18 +1213,17 @@ theorem check_nanosleep_frame (i : SyscallInput) (rqtp rmtp : word) (eff : Sysca
    THE `socket` ARM, and the measured reason it did NOT need the
    `private abbrev` workaround the ledger expected.
 
-   `check_socket`'s nine gates are built on `Checks/Sys/Net/Socket.lean`'s
-   `private abbrev abi_low32`, and the recorded obstacle
-   says a `private` helper's terms cannot be written from another
-   module.  THAT IS NOT TRUE FOR A `private ABBREV`.  `abi_low32` is
-   transparent (`abbrev`, not `def`), so `Syscall.abi_low32` — its public
-   body — is DEFINITIONALLY EQUAL to it, and `by_cases h : <guard> = true`
-   followed by `rw [ite_eq_left h] at H` unifies through that equality: the
-   rewrite finds the occurrence even though the goal carries the private
-   name.  Measured here: every one of the twelve gates rewrites.  The
-   `*_frame`-beside-the-helper route is still the right one for a private
-   `DEF` (whose equation lemmas are unnameable) — it is just not what
-   this arm needed, and `Checks/Sys/Net/Socket.lean` is unchanged.
+   `check_socket`'s nine gates are spelled through the CANONICAL
+   `Sys.Syscall.abi_low32` (`Checks/Sys/Net/Socket.lean` binds it with a
+   `local notation`; it no longer declares a helper of its own).  The
+   recorded obstacle says a `private` helper's terms cannot be written from
+   another module.  THAT WAS NEVER TRUE FOR THE `abbrev` THIS ARM USED: a
+   transparency check holds — the checker's alias was the public `def`'s body
+   — so `by_cases h : <guard> = true` followed by
+   `rw [ite_eq_left h] at H` unifies through it.  Measured here: every one
+   of the twelve gates rewrites.  The `*_frame`-beside-the-helper route is
+   still the right one for a private `DEF` (whose equation lemmas are
+   unnameable) — it is just not what this arm needed.
 
    The abbrev below only makes the guard text readable; being an `abbrev` it
    is transparent for the same reason.  Nothing else in the arm is special:
@@ -1238,9 +1233,9 @@ theorem check_nanosleep_frame (i : SyscallInput) (rqtp rmtp : word) (eff : Sysca
    the lemma above (`mk` is a `with_fds` rebuild, so the projection is the
    old one). -/
 
-/-- The socket gate's 32-bit truncation, spelled out so the
-    guards below are writable (`Checks/Sys/Net/Socket.lean`'s own
-    `abi_low32` is `private`; this is the same function). -/
+/-- The socket gate's 32-bit truncation, spelled out so the guards below are
+    writable; the checker binds the same canonical `def` with a
+    `local notation`, and this is the same function. -/
 private abbrev socket_low32 (w : word) : word :=
   LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32 w
 
@@ -1292,7 +1287,7 @@ theorem check_new_fd_result_frame (es : List Int) (eff : SyscallEffect) (m m' : 
   | cons w tl => try (dsimp only at H); cases H
 
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff) in
+
 theorem check_socket_frame (domain type protocol : word) (eff : SyscallEffect) (m m' : Model) (evs : List event)
     (H : LinuxSem.Checks.Sys.Net.Socket.check_socket domain type protocol eff m = .CheckOk m' evs) :
     m_vmmaps m' = m_vmmaps m := by
@@ -1644,7 +1639,6 @@ theorem check_write_frame (i : SyscallInput) (fd buf count : word) (eff : Syscal
    frames `Checks/Sys/Fs/Open.lean` already carries for them. -/
 
 open LinuxSem.LinuxProcessSem.Sys.Fs.Open
-open LinuxSem.LinuxProcessSem.Sys.Fs.File (z_ldiff)
 
 theorem check_open_result_frame (eff : SyscallEffect) (m m' : Model) (mk : word → Model) (evs : List event)
     (H : check_open_result eff m mk = .CheckOk m' evs)
@@ -2066,10 +2060,9 @@ theorem check_openat_frame (i : SyscallInput) (dirfd pathp flags : word) (eff : 
    hypothesis is the one-line application `check_connect … = .CheckOk …`)
    and each leaf opens it with a pre-proved ARM EQUATION, whose left-hand
    side is that same application — a one-hole motive again, so nothing
-   embeds the body.  The 11 equations are `private` to
-   `LinuxSem.Checks.Sys.Net.Socket` (`connect_chk_*`):
-   a sibling module cannot name them, so they are restated here
-   as `check_connect_arm_*`, with the same statements and the same
+   embeds the body.  The 11 equations are the public `connect_chk_*` of
+   `Checks/Sys/Net/Socket/Connect.lean`, stated once there, so this module
+   cites them directly, at the same statements and with the same
    `unfold check_connect` / `simp only […]` proofs.  They are the frozen
    checker's equation lemmas; the frame below is their dispatcher.
    ------------------------------------------------------------------------- -/
@@ -2105,6 +2098,7 @@ theorem check_errno_or_success_model (es : List Int) (fds : List (word × FdEntr
   all_goals (try (dsimp only at H); cases H)
 
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
+
 /-- `bind`'s frame.  The guard walk is `check_bind_sound_ok`'s, with
     `simp only [h, ite_true]` doing the `if`-reduction (see the block note
     for why `rw [ite_eq_left]` must not be used here); `bind`'s socket arm never
@@ -2197,201 +2191,18 @@ theorem check_bind_frame (i : SyscallInput) (fd addrp addrlen : word)
 /- -------------------------------------------------------------------------
    `connect`'s frozen-checker arm equations.
 
-   Same statements and same proofs as the private `connect_chk_*` in
-   `Checks/Sys/Net/Socket/Connect.lean`; restated here because a sibling
-   module cannot name a private lemma.  `av` is opaque on purpose:
+   The `connect_chk_*` equations live once, in
+   `Checks/Sys/Net/Socket/Connect.lean`; this module cites them directly.
+   `av` is opaque on purpose:
    the dispatcher instantiates it with `sint32 addrlen` and `hal` with
    `rfl`, so no `decide`-bearing `Int` term is ever forced to normalise
    inside the kernel.
    ------------------------------------------------------------------------- -/
 
 open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `-EBADF` arm. -/
-theorem check_connect_arm_ebadf (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model)
-    (hfd : fd_lookup (m_fds m) fd = none) :
-    check_connect i fd addrp addrlen eff m = check_ret_only eff (errno_ret EBADF) m [] := by
-  unfold check_connect
-  simp only [hfd]
 
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `addrlen` out-of-range arm. -/
-theorem check_connect_arm_guard (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (e : FdEntry) (av : Int)
-    (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some e)
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = true) :
-    check_connect i fd addrp addrlen eff m = check_ret_only eff (errno_ret EINVAL) m [] := by
-  unfold check_connect
-  simp only [hal, hfd, hg, ite_true]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `-EFAULT` arm. -/
-theorem check_connect_arm_efault (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (e : FdEntry) (av : Int)
-    (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some e)
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = none) :
-    check_connect i fd addrp addrlen eff m = check_ret_only eff (errno_ret EFAULT) m [] := by
-  unfold check_connect
-  simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The short-`addrlen` socket arm. -/
-theorem check_connect_arm_family (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = true) :
-    check_connect i fd addrp addrlen eff m =
-      check_ret_only_copyins (if av == 0 then [] else [(addrp, bs.length)]) eff
-        (errno_ret EINVAL) m [] := by
-  unfold check_connect
-  simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, ite_true]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `AF_UNSPEC` fresh-socket arm. -/
-theorem check_connect_arm_unspec_fresh (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket .SkFresh))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = false)
-    (hfam : (sa_family_of bs == AF_UNSPEC) = true) :
-    check_connect i fd addrp addrlen eff m =
-      check_ret_only_copyins (if av == 0 then [] else [(addrp, bs.length)]) eff
-        (BitVec.ofInt 64 0) m [] := by
-  unfold check_connect
-  simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false,
-    hfam, ite_true]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `AF_UNSPEC` declining arm. -/
-theorem check_connect_arm_unspec_other (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = false)
-    (hfam : (sa_family_of bs == AF_UNSPEC) = true)
-    (hsk : sk ≠ .SkFresh) :
-    check_connect i fd addrp addrlen eff m = .CheckUnmodeled := by
-  unfold check_connect
-  cases sk with
-  | SkFresh => exact absurd rfl hsk
-  | _ =>
-      simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false,
-        hfam, ite_true]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `-EISCONN` arm. -/
-theorem check_connect_arm_eisconn (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = false)
-    (hfam : (sa_family_of bs == AF_UNSPEC) = false)
-    (hsk1 : sk ≠ .SkFresh) (hsk2 : sk ≠ .SkBound) :
-    check_connect i fd addrp addrlen eff m =
-      check_ret_only_copyins (if av == 0 then [] else [(addrp, bs.length)]) eff
-        (errno_ret EISCONN) m [] := by
-  unfold check_connect
-  cases sk with
-  | SkFresh => exact absurd rfl hsk1
-  | SkBound => exact absurd rfl hsk2
-  | _ =>
-      simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false,
-        hfam, Bool.false_eq_true, ite_false]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `-EINVAL` short-`sockaddr_in` arm. -/
-theorem check_connect_arm_inet_einval (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = false)
-    (hfam : (sa_family_of bs == AF_UNSPEC) = false)
-    (hsk : sk = .SkFresh ∨ sk = .SkBound)
-    (hi : decide (av < SOCKADDR_IN_SIZE) = true) :
-    check_connect i fd addrp addrlen eff m =
-      check_ret_only_copyins (if av == 0 then [] else [(addrp, bs.length)]) eff
-        (errno_ret EINVAL) m [] := by
-  unfold check_connect
-  rcases hsk with rfl | rfl <;>
-    simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false,
-      hfam, Bool.false_eq_true, ite_false, hi, ite_true]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `-EAFNOSUPPORT` arm. -/
-theorem check_connect_arm_inet_eafnosupport (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = false)
-    (hfam : (sa_family_of bs == AF_UNSPEC) = false)
-    (hsk : sk = .SkFresh ∨ sk = .SkBound)
-    (hi : decide (av < SOCKADDR_IN_SIZE) = false)
-    (hf : (!(sa_family_of bs == AF_INET)) = true) :
-    check_connect i fd addrp addrlen eff m =
-      check_ret_only_copyins (if av == 0 then [] else [(addrp, bs.length)]) eff
-        (errno_ret EAFNOSUPPORT) m [] := by
-  unfold check_connect
-  rcases hsk with rfl | rfl <;>
-    simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false,
-      hfam, Bool.false_eq_true, ite_false, hi, Bool.false_eq_true, ite_false, hf, ite_true]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The declining `tcp_v4_connect` arm. -/
-theorem check_connect_arm_inet_unmodeled (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (sk : SockState) (bs : List byte)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some (.FdSocket sk))
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs)
-    (hs : decide (av < SA_FAMILY_SIZE) = false)
-    (hfam : (sa_family_of bs == AF_UNSPEC) = false)
-    (hsk : sk = .SkFresh ∨ sk = .SkBound)
-    (hi : decide (av < SOCKADDR_IN_SIZE) = false)
-    (hf : (!(sa_family_of bs == AF_INET)) = false) :
-    check_connect i fd addrp addrlen eff m = .CheckUnmodeled := by
-  unfold check_connect
-  rcases hsk with rfl | rfl <;>
-    simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb, hs, Bool.false_eq_true, ite_false,
-      hfam, Bool.false_eq_true, ite_false, hi, Bool.false_eq_true, ite_false, hf,
-      Bool.false_eq_true, ite_false]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
-/-- The `-ENOTSOCK` arm. -/
-theorem check_connect_arm_enotsock (i : SyscallInput) (fd addrp addrlen : word)
-    (eff : SyscallEffect) (m : Model) (e : FdEntry)
-    (hns : ∀ s, e ≠ .FdSocket s)
-    (av : Int) (hal : sint32 addrlen = av)
-    (hfd : fd_lookup (m_fds m) fd = some e)
-    (hg : (decide (av < 0) || decide (SOCKADDR_STORAGE_SIZE < av)) = false)
-    (bs : List byte)
-    (hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 av) = some bs) :
-    check_connect i fd addrp addrlen eff m =
-      check_ret_only_copyins (if av == 0 then [] else [(addrp, bs.length)]) eff
-        (errno_ret ENOTSOCK) m [] := by
-  unfold check_connect
-  cases e with
-  | FdSocket sk => exact absurd rfl (hns sk)
-  | _ => simp only [hal, hfd, hg, Bool.false_eq_true, ite_false, hrb]
-
-open LinuxSem.LinuxProcessSem.Sys.Net.Socket in
 /-- `connect`'s frame: the dispatcher over the frozen checker, one
-    `check_connect_arm_*` equation per leaf and the `*_model` inversions
+    `connect_chk_*` equation per leaf and the `*_model` inversions
     for the three closers.  Every `cases` here is on a guard term that
     occurs in NEITHER the hypothesis nor the goal (the checker stays
     folded), so no motive over the body is ever built — see the block note
@@ -2404,14 +2215,14 @@ theorem check_connect_frame (i : SyscallInput) (fd addrp addrlen : word)
     m_vmmaps m' = m_vmmaps m := by
   cases hfd : fd_lookup (m_fds m) fd with
   | none =>
-    rw [check_connect_arm_ebadf i fd addrp addrlen eff m hfd] at H
+    rw [connect_chk_ebadf i fd addrp addrlen eff m hfd] at H
     rw [check_ret_only_model _ _ _ _ _ _ H]
   | some e =>
     cases hg : (decide (sint32 addrlen < 0) || decide (SOCKADDR_STORAGE_SIZE < sint32 addrlen)) with
     | false =>
       cases hrb : read_bytes_map i.in_mem addrp (BitVec.ofInt 64 (sint32 addrlen)) with
       | none =>
-        rw [check_connect_arm_efault i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg hrb]
+        rw [connect_chk_efault i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg hrb]
           at H
         rw [check_ret_only_model _ _ _ _ _ _ H]
       | some bs =>
@@ -2427,15 +2238,15 @@ theorem check_connect_frame (i : SyscallInput) (fd addrp addrlen : word)
                 | false =>
                   cases hf : (!(sa_family_of bs == AF_INET)) with
                   | false =>
-                    rw [check_connect_arm_inet_unmodeled i fd addrp addrlen eff m _ bs
+                    rw [connect_chk_inet_unmodeled i fd addrp addrlen eff m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inl rfl) hi hf] at H
                     cases H
                   | true =>
-                    rw [check_connect_arm_inet_eafnosupport i fd addrp addrlen eff m _ bs
+                    rw [connect_chk_inet_eafnosupport i fd addrp addrlen eff m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inl rfl) hi hf] at H
                     rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
                 | true =>
-                  rw [check_connect_arm_inet_einval i fd addrp addrlen eff m _ bs
+                  rw [connect_chk_inet_einval i fd addrp addrlen eff m _ bs
                     (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inl rfl) hi] at H
                   rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
               | SkBound =>
@@ -2443,43 +2254,55 @@ theorem check_connect_frame (i : SyscallInput) (fd addrp addrlen : word)
                 | false =>
                   cases hf : (!(sa_family_of bs == AF_INET)) with
                   | false =>
-                    rw [check_connect_arm_inet_unmodeled i fd addrp addrlen eff m _ bs
+                    rw [connect_chk_inet_unmodeled i fd addrp addrlen eff m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inr rfl) hi hf] at H
                     cases H
                   | true =>
-                    rw [check_connect_arm_inet_eafnosupport i fd addrp addrlen eff m _ bs
+                    rw [connect_chk_inet_eafnosupport i fd addrp addrlen eff m _ bs
                       (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inr rfl) hi hf] at H
                     rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
                 | true =>
-                  rw [check_connect_arm_inet_einval i fd addrp addrlen eff m _ bs
+                  rw [connect_chk_inet_einval i fd addrp addrlen eff m _ bs
                     (sint32 addrlen) rfl hfd hg hrb hs hfam (Or.inr rfl) hi] at H
                   rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
               | _ =>
-                rw [check_connect_arm_eisconn i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl
+                rw [connect_chk_eisconn i fd addrp addrlen eff m _ bs (sint32 addrlen) rfl
                   hfd hg hrb hs hfam (by intro h; cases h) (by intro h; cases h)] at H
                 rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
             | true =>
               cases sk with
               | SkFresh =>
-                rw [check_connect_arm_unspec_fresh i fd addrp addrlen eff m bs (sint32 addrlen)
+                rw [connect_chk_unspec_fresh i fd addrp addrlen eff m bs (sint32 addrlen)
                   rfl hfd hg hrb hs hfam] at H
                 rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
               | _ =>
-                rw [check_connect_arm_unspec_other i fd addrp addrlen eff m _ bs (sint32 addrlen)
+                rw [connect_chk_unspec_other i fd addrp addrlen eff m _ bs (sint32 addrlen)
                   rfl hfd hg hrb hs hfam (by intro h; cases h)] at H
                 cases H
           | true =>
-            rw [check_connect_arm_family i fd addrp addrlen eff m sk bs (sint32 addrlen) rfl hfd
+            rw [connect_chk_family i fd addrp addrlen eff m sk bs (sint32 addrlen) rfl hfd
               hg hrb hs] at H
             rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
         | _ =>
-          rw [check_connect_arm_enotsock i fd addrp addrlen eff m _ (by rintro s h; cases h)
+          rw [connect_chk_enotsock i fd addrp addrlen eff m _ (by rintro s h; cases h)
             (sint32 addrlen) rfl hfd hg bs hrb] at H
           rw [check_ret_only_copyins_model _ _ _ _ _ _ _ H]
     | true =>
-      rw [check_connect_arm_guard i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg] at H
+      rw [connect_chk_guard i fd addrp addrlen eff m e (sint32 addrlen) rfl hfd hg] at H
       rw [check_ret_only_model _ _ _ _ _ _ H]
 
 
 
 end LinuxSem.Checks.VmMapsDisjoint
+
+
+
+
+
+
+
+
+
+
+
+

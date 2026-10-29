@@ -67,6 +67,7 @@ import LinuxSem.Common.StoreOk
 import LinuxSem.Common.SymExec
 import LinuxSem.Common.SymStepR
 import LinuxSem.Common.StepTac
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Common.AxSymExec3
 import LinuxSem.Common.AxSymExec3Sound
 
@@ -86,6 +87,7 @@ open LinuxSem.Common.StoreOk
 open LinuxSem.Common.SymStepR
 open LinuxSem.Common.StepTac
 open LinuxSem.Common.AxSymExec3
+open LinuxSem.Common.RocqSpelling
 open LinuxSem.Common.AxSymExec3Sound
 
 /-- `Local Instance asanreflect_fx : PropExec.FPState :=

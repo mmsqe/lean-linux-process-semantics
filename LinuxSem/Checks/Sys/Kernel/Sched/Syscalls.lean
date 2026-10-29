@@ -15,7 +15,8 @@
   and `outcome` / `Sys A` are `Outcome SyscallEffect Model event` /
   `SysSpec SyscallEffect` (`MonadInstances`).
 
-  The spec's two readers are one iff lemma, `bind_inputSpec` (below), plus
+  The spec's two readers are one iff lemma, `bind_inputSpec` (canonical in
+  `LinuxSem.LinuxProcessSem`, reached through the `open` below), plus
   `Monad.bind_getModel`, so the whole prologue is a `simp only` step in both
   directions.  `sys_unfold` / `inv_ok` give way to the `simp only` lists
   spelled out at each leaf; `dsimp only` performs the beta/iota reduction;
@@ -43,8 +44,10 @@
 -/
 import LinuxSem.Checks.Sys.Prelude
 import LinuxSem.LinuxProcessSem.Sys.Kernel.Sched.Syscalls
+import LinuxSem.Common.SharedFacts
 
 namespace LinuxSem.Checks.Sys.Kernel.Sched.Syscalls
+open LinuxSem.Common.SharedFacts
 
 open LinuxSem.Riscv
 open LinuxSem.LinuxProcessSem
@@ -60,33 +63,9 @@ local notation "bind" => LinuxSem.LinuxProcessSem.bind
 
     Both `sched_setscheduler` proofs open the spec's
     `i <- input ;; m <- get_model ;; …` prologue.  Stated as an iff, that
-    step is a `simp only` on either side of the proof. -/
-
-private theorem bind_inputSpec {A : Type} (k : SyscallInput → SysSpec A)
-    (i : SyscallInput) (m : Model) (o : Outcome A Model event) :
-    bind inputSpec k i m o ↔ k i i m o := by
-  cases o with
-  | ok x m' evs =>
-      constructor
-      · exact input_bind_ok_inv k i m x m' evs
-      · intro h
-        exact bind_ok0 inputSpec k i m i m x m' evs (input_ok i m) h
-  | unmodeled =>
-      constructor
-      · exact input_bind_unmodeled_inv k i m
-      · intro h
-        exact bind_unmodeled2 inputSpec k i m i m [] (input_ok i m) h
-
-/-- `record_copyins reads (ret_only r)`: the answer `r`, no writes, and
-    `reads` on the copy-in ledger.  (`record_copyins` prepends to
-    `eff.eff_copyins`, which is `[]` for `ret_only`, so the
-    `reads ++ []` it builds is that same list.) -/
-private theorem record_copyins_ret_only_ok (reads : List (word × Nat))
-    (r : word) (i : SyscallInput) (m : Model) :
-    record_copyins reads (ret_only r) i m
-      (.ok (with_copyins reads (mkEffect r [] [])) m []) := by
-  refine ⟨mkEffect r [] [], m, [], [], rfl, ?_, rfl⟩
-  simp [LinuxSem.LinuxProcessSem.pure, with_copyins, List.append_nil]
+    step is a `simp only` on either side of the proof: the canonical
+    `LinuxSem.LinuxProcessSem.bind_inputSpec`, reached through the `open`
+    above, is that one `↔` for both directions and both outcome shapes. -/
 
 /-! ## sched_getaffinity (123) -/
 
@@ -538,14 +517,7 @@ private def portInput : SyscallInput :=
 
 /-- A model with no pinned tid: only a zero pid can name the caller. -/
 private def portModel : Model :=
-  mkModel [] (mkVmMaps [] [] 0 0 0) IEof [] none none none
-
-/-- A zero pid always names the caller, whatever the model's tid is. -/
-private theorem port_self (m : Model) :
-    sched_targets_self_b (0 : word) m = true := by
-  unfold sched_targets_self_b
-  rw [show w_is0 (pid32 (0 : word)) = true from by decide]
-  rfl
+  mkModel [] (mkVmMaps [] [] 0 0 0) IEof []
 
 /-- THE SUCCESS ARM: SCHED_IDLE at priority 0 on the calling task answers
     0, and the four bytes at `param` are on the copy-in ledger. -/
@@ -560,7 +532,7 @@ example :
   have hans : sched_setscheduler_answer ((abi_low32 (5 : word)).toNat : Int)
       ((le_bytes_to_word [0, 0, 0, 0]).toNat : Int) = some 0 := by decide
   have hself : ¬ ((!sched_targets_self_b (0 : word) portModel) = true) := by
-    rw [port_self]
+    rw [self_zero]
     simp
   simp only [check_sched_setscheduler, ite_eq_right h1, ite_eq_right h2, hread, ite_eq_right hself, hans]
   exact check_ret_only_copyins_refl [(4, 4)] 0 portModel []
@@ -580,7 +552,7 @@ example :
       ((le_bytes_to_word [0, 0, 0, 0]).toNat : Int) = some (errno_ret EINVAL) := by
     decide
   have hself : ¬ ((!sched_targets_self_b (0 : word) portModel) = true) := by
-    rw [port_self]
+    rw [self_zero]
     simp
   simp only [check_sched_setscheduler, ite_eq_right h1, ite_eq_right h2, hread, ite_eq_right hself, hans]
   exact check_ret_only_copyins_refl [(4, 4)] (errno_ret EINVAL) portModel []
@@ -602,3 +574,5 @@ example :
   simp only [check_sched_setscheduler, ite_eq_right h1, ite_eq_right h2, hread, ite_eq_left hself]
 
 end LinuxSem.Checks.Sys.Kernel.Sched.Syscalls
+
+

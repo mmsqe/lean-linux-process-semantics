@@ -80,6 +80,7 @@
   the argument order.
 -/
 import LinuxSem.Checks.Progress
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.LinuxProcessSem.StackLayout
 import LinuxSem.LinuxProcessSem.Specs
 import LinuxSem.LinuxProcessSem.Sys.Dispatch
@@ -106,12 +107,13 @@ open LinuxSem.Checks.Progress
 
 namespace LinuxSem.Checks.DispatchSurface
 
-/-- `bv_unsigned w` is `w`'s value as an integer, declared here as the
-    other `Checks` files declare it so that the statements below read in
-    one vocabulary.  It is a plain abbreviation, definitionally
-    `(w.toNat : Int)` — which is the spelling `Sys.Dispatch.dispatch`
-    itself uses, so nothing below needs to rewrite between the two. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
+open LinuxSem.Common.RocqSpelling
+
+/- `bv_unsigned w` is `w`'s value as an integer, from the one shared
+   declaration in `LinuxSem.Common.RocqSpelling` (imported and opened
+   here).  Being an abbreviation it is definitionally `(w.toNat : Int)` —
+   the spelling `Sys.Dispatch.dispatch` itself uses, so nothing below
+   needs to rewrite between the two. -/
 
 /- =========================================================================
    Small helpers

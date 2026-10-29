@@ -142,6 +142,7 @@
   makes `eff_ret eff` read as written.
 -/
 import LinuxSem.Checks.ExecutableSpecs
+import LinuxSem.Common.RocqSpelling
 import LinuxSem.Checks.Sys.DispatchCompute
 import LinuxSem.LinuxProcessSem.Run
 import LinuxSem.LinuxProcessSem.StackLayout
@@ -173,22 +174,18 @@ open LinuxSem.Checks.Sys.Kernel.Sys
 
 namespace LinuxSem.Checks.ProcessCreation
 
+open LinuxSem.Common.RocqSpelling
+
 /-! ## The local shims
 
     Transparent aliases, so no statement below changes meaning. -/
 
-/-- `bv_unsigned`: the unsigned value of a bitvector, in
-    `Int` so that range arithmetic does not wrap. -/
-abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
-
-/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
-abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
+/- `bv_unsigned`, `Z_to_bv`, `eff_ret`: the shared Rocq spellings, from the
+   one declaration in `LinuxSem.Common.RocqSpelling` (imported and opened
+   above). -/
 
 /-- `in_sysno` as a function (a `SyscallInput` field projection). -/
 abbrev in_sysno (i : SyscallInput) : word := i.in_sysno
-
-/-- `eff_ret` as a function. -/
-abbrev eff_ret (e : SyscallEffect) : word := e.eff_ret
 
 /-- `mkCfg`: a run-level configuration is the machine state and the
     model, and nothing else (`Run.config`'s two fields). -/
