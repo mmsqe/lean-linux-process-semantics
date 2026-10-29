@@ -1,0 +1,560 @@
+/-
+  * LinuxSem.Checks.Cases.Kernel.Sys — worked examples over getpid (172), gettid (178), uname (160), prlimit64 (261)
+
+  Worked cases over `Sys.Kernel.Sys`, which answers to Linux
+  [kernel/sys.c]: the examples for the syscalls defined there, and no
+  others.  [setsid] (157) is defined there too but its worked
+  examples are NOT here: they sit in `Checks.ProcessCreation`, beside
+  the process-creation numbers whose refusal they are the counterpart
+  of, and they are built on that file's own [pc_model]/[pc_input].
+
+  `Checks.Examples` keeps what is not per-syscall and re-exports this
+  module.  Each case is read off the specs and checkers of the matching
+  `Sys` module, without running a binary.
+
+  Spelling.  Statements keep their names; the few spellings Lean does
+  not have are supplied as local transparent `abbrev`s below,
+  DEFINITIONALLY EQUAL to what they stand for:
+  - `bv_unsigned w` is `(w.toNat : Int)` and `Z_to_bv n z` is
+    `BitVec.ofInt n z`;
+  - `zeqb`/`zleb`/`zltb` are `Z.eqb`/`Z.leb`/`Z.ltb` on `Int`;
+  - a chained comparison `0 < a < b` is written `0 < a ∧ a < b`.
+
+  Proofs.  Every concrete example is a closed goal and closes by `rfl` —
+  kernel reduction.  `decide` cannot be the rule: `check_result` carries
+  a `Model` and so has no `DecidableEq`.  The two envelope lemmas
+  ([Kernel.Sys.getpid_spec] and [Kernel.Sys.gettid_spec]) are bare
+  `exact`s: both are DEFINED as [Kernel.Fork.set_tid_address_spec], so
+  the [Kernel.Fork] lemma applies definitionally.
+-/
+import LinuxSem.Checks.Cases.Prelude
+import LinuxSem.Checks.Cases.Fs.ReadWrite
+import LinuxSem.Checks.Cases.Kernel.Fork
+import LinuxSem.LinuxProcessSem.Sys.Kernel.Sys
+import LinuxSem.LinuxProcessSem.Sys.Kernel.Fork
+import LinuxSem.LinuxProcessSem.StateLedger
+import LinuxSem.LinuxProcessSem.StateMemory
+
+set_option autoImplicit false
+set_option maxRecDepth 1000000
+
+open LinuxSem.Riscv
+open LinuxSem.LinuxProcessSem
+open LinuxSem.LinuxProcessSem.Fs
+open LinuxSem.LinuxProcessSem.Run
+open LinuxSem.LinuxProcessSem.StackLayout
+open LinuxSem.LinuxProcessSem.MemImageType
+open LinuxSem.LinuxProcessSem.RiscvSemantics
+open LinuxSem.LinuxProcessSem.Sys.Uapi
+open LinuxSem.LinuxProcessSem.Sys.Syscall
+open LinuxSem.LinuxProcessSem.Sys.Kernel.Sys
+open LinuxSem.LinuxProcessSem.Sys.Kernel.Fork
+open LinuxSem.Checks
+open LinuxSem.Checks.ExecutableSpecs
+open LinuxSem.Checks.Sys.Prelude
+open LinuxSem.Checks.Cases.Prelude
+open LinuxSem.Checks.Cases.Kernel.Fork
+
+namespace LinuxSem.Checks.Cases.Kernel.Sys
+
+/-! ## The prelude's abbreviations, restored
+
+    Each of these is a transparent alias, so it
+    changes no statement's meaning. -/
+
+/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
+    `Int` so that range arithmetic does not wrap. -/
+abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
+
+/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
+abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
+
+/-- `Z.eqb` (and `Nat.eqb`), over any `BEq`. -/
+abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
+
+/-- `Z.leb` on `Int`. -/
+abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
+
+/-- `Z.ltb` on `Int`. -/
+abbrev zltb (a b : Int) : Bool := decide (a < b)
+
+/-! * LinuxProcessSem.Checks.Cases.Kernel.Sys — worked examples over getpid (172), gettid (178), uname (160), prlimit64 (261)
+
+    Worked cases over `Sys.Kernel.Sys`, which answers to Linux [kernel/sys.c]: the
+    examples for the syscalls defined there, and no others.
+
+    `Checks.Examples` keeps what is not per-syscall and re-exports this
+    module.  Each case is read off the specs and checkers of the matching
+    `Sys` module, without running a binary. -/
+
+
+/-! The same envelope bound, for [getpid].  Earns its place by reason 1:
+    it is a [forall] over admissible outcomes, and a finite set of runs
+    can SAMPLE the envelope but cannot quantify over it.
+
+    The proof is [exact] because [Kernel.Sys.getpid_spec] IS
+    [Fork.set_tid_address_spec].  That is the point of stating it under
+    this name anyway: a reader asking "is every value [getpid] may
+    answer inside the envelope?" should find the answer under [getpid],
+    not have to already know the two are one relation. -/
+
+theorem getpid_first_choice_is_within_modeled_envelope :
+  ∀ i m eff m' evs,
+  m_tid m = none →
+  getpid_spec i m (.ok eff m' evs) →
+  ∃ tid,
+    (0 < bv_unsigned tid ∧ bv_unsigned tid < PID_MAX_ENVELOPE) ∧
+    eff = mkEffect tid [] [] ∧
+    m' = with_tid tid m ∧
+    evs = []
+:= by
+  exact set_tid_address_first_choice_is_within_modeled_envelope
+
+/-! The same envelope bound again, for [gettid], and it earns its place
+    the same way: a finite set of runs can sample the envelope but
+    cannot quantify over it.
+
+    Stating it under this name is the point, as it is for [getpid]: a
+    reader asking "what may [gettid] answer?" should not have to already
+    know that three syscall numbers share one relation before the answer
+    is reachable. -/
+
+theorem gettid_first_choice_is_within_modeled_envelope :
+  ∀ i m eff m' evs,
+  m_tid m = none →
+  gettid_spec i m (.ok eff m' evs) →
+  ∃ tid,
+    (0 < bv_unsigned tid ∧ bv_unsigned tid < PID_MAX_ENVELOPE) ∧
+    eff = mkEffect tid [] [] ∧
+    m' = with_tid tid m ∧
+    evs = []
+:= by
+  exact set_tid_address_first_choice_is_within_modeled_envelope
+
+/-! A write to a FILE emits no events — the file system is observed only
+    at exit.  This is the model-level content behind the [equiv] example
+    [write_then_diverge_vs_diverge]: no admissible file-write outcome
+    carries events. -/
+
+/-! ...and so does every other terminal-only request.  This drives the
+    checker over the whole set on a CHANNEL. -/
+
+/-! Any other request on a LIVE fd is unmodeled (fail closed).  FIONREAD
+    and FIONBIO are the two the model most conspicuously declines, and
+    they are declined for opposite reasons: FIONREAD SUCCEEDS with an
+    answer that depends on the fd's kind — bytes left in a file, bytes
+    queued in a pipe — and FIONBIO succeeds and changes the file's
+    O_NONBLOCK state, which this model does not carry.  Neither has a
+    constant answer, so neither is modeled. -/
+
+/- -------------------------------------------------------------------------
+   The fd argument is 32 bits ([Syscall.fd32])
+
+   Every fd-taking syscall declares its fd [int]/[unsigned int], so the
+   kernel DISCARDS the high half of the register before touching the fd
+   table.  What is here is the cross-run equality, the rejecting halves, the
+   boundary sweep that justifies zero-extension, and the constant itself.
+   ------------------------------------------------------------------------- -/
+
+/-! write(2^32 + 1, "ab", 2) is a write to STDOUT, with exactly the
+    verdict and events of write(1, "ab", 2) — a bare 64-bit compare
+    against the fd table would answer -EBADF, a behavior no kernel
+    produces.  And that -EBADF is NOT admissible. -/
+
+/- -------------------------------------------------------------------------
+   uname (160)
+
+   These earn their place by the same reason [prlimit64]'s pinning
+   examples do: they are claims about a relation BETWEEN two calls of one
+   run, and about the shape of a name no kernel hands out.  A real run
+   reaches the first but can never produce the second — no Linux answers
+   a uname whose sysname is not "Linux", so the rejecting half exists
+   only here.
+   ------------------------------------------------------------------------- -/
+
+/-! The FIRST uname is where the environment's kernel identity enters the
+    model: any name inside [Kernel.Sys.utsname_wf]'s envelope is
+    admissible, and it becomes the pin. -/
+
+theorem uname_first_copy_pins :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out)
+    (mkEffect 0 [(4096, uts_demo)] []) uts_model
+  = .CheckOk (with_utsname uts_demo uts_model) []
+:= by rfl
+
+/-! …but not a name the kernel cannot hold.  [sysname] is written once,
+    by [init_uts_ns], and no syscall touches it, so "Linuy" is a
+    conformance failure rather than an unusual machine. -/
+
+theorem uname_wrong_sysname_rejected :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out)
+    (mkEffect 0 [(4096, uts_bad_sysname)] []) uts_model
+  = .CheckReject
+:= by rfl
+
+/-! …and not an unterminated member either.  The release's CONTENT is
+    free — [uts_demo] and [uts_demo_b] are both admissible — so this
+    rejection attributes to the terminator conjunct alone. -/
+
+theorem uname_unterminated_release_rejected :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out)
+    (mkEffect 0 [(4096, uts_unterminated_release)] []) uts_model
+  = .CheckReject
+:= by rfl
+
+/-! Once pinned, a later uname must repeat it exactly.  The defector
+    below is itself well-formed — [uts_demo_b] would have been accepted
+    as the FIRST answer — so it is refused for disagreeing with the
+    record, not for being a bad name.  That is the whole content of "a
+    machine has one kernel for the life of a process", and it is the
+    conjunct a per-call [choose] would have dropped. -/
+
+theorem uname_pinned_copy_repeats :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out)
+    (mkEffect 0 [(4096, uts_demo)] []) uts_pinned
+  = .CheckOk uts_pinned []
+:= by rfl
+
+theorem uname_pinned_copy_defector_rejected :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out)
+    (mkEffect 0 [(4096, uts_demo_b)] []) uts_pinned
+  = .CheckReject
+:= by rfl
+
+/-! …and the defector is refused for THAT reason and no other: offered as
+    a first answer it is accepted, and pins itself. -/
+
+theorem uname_defector_is_itself_admissible_first :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out)
+    (mkEffect 0 [(4096, uts_demo_b)] []) uts_model
+  = .CheckOk (with_utsname uts_demo_b uts_model) []
+:= by rfl
+
+/-! A destination past [State.TASK_SIZE] fails [access_ok], which is
+    [copy_to_user]'s own gate, so -EFAULT is exact and no byte moves. -/
+
+theorem uname_access_ok_fault :
+  check_syscall
+    (SyscallInput.mkInput 160 [9223372036854775808, 0, 0, 0, 0, 0]
+      (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EFAULT) [] []) uts_model
+  = .CheckOk uts_model []
+:= by rfl
+
+/-! A range [access_ok] ADMITS but memory does not wholly back is
+    declined, not faulted: [copy_to_user] would commit a prefix and then
+    answer -EFAULT, and the model cannot say how long that prefix is.
+    One byte short of 390 is the whole difference. -/
+
+theorem uname_one_byte_short_is_unmodeled :
+  check_syscall (SyscallInput.mkInput 160 [4096, 0, 0, 0, 0, 0] (fun _ => none) uts_out_short)
+    (mkEffect 0 [(4096, uts_demo)] []) uts_model
+  = .CheckUnmodeled
+:= by rfl
+
+/-! THE WRAPPING DESTINATION, pinned in both directions.  [uname_spec]
+    asks [State.access_okb] BEFORE it walks [State.read_bytes_map], and
+    these three say why that order is the arm and not a style choice.
+    The group is modelled on [Checks.Cases.Fs.Pipe]'s [pipe2_wrap_]
+    examples; the argument for the guard is on [Kernel.Sys.uname_spec]'s
+    own arm and is not restated here.
+
+    No real run can reach it: no real process has memory mapped at the
+    top of the address space, so the mapping below is one only a
+    hand-written model can present. -/
+
+/-! What the bare walk says: "wholly writable", because the word
+    arithmetic wraps 2^64 - 4 round onto the 386 mapped bytes at 0.
+    Pinning it beside the two below is what stops them going vacuous —
+    each would also pass if [uts_wrap_name] stopped wrapping or
+    [uts_wrap_mem] stopped mapping the range. -/
+
+theorem uname_wrap_would_pass_the_bare_walk :
+  read_bytes_map uts_wrap_mem uts_wrap_name (Z_to_bv 64 390) ≠ none
+:= by
+  intro h
+  cases h
+
+theorem uname_wrap_name_is_not_access_ok :
+  access_okb uts_wrap_name 390 = false
+:= by rfl
+
+/-! THE NEGATIVE HALF: the effect offered here is exactly what an
+    unguarded arm would have accepted — 0 returned with the 390 bytes
+    stored at [2^64 - 4] and, once the word wrapped, at 0.  Linux cannot
+    produce it: [copy_to_user]'s [access_ok] refuses the range before a
+    byte moves and [SYSCALL_DEFINE1(newuname)] returns -EFAULT. -/
+
+theorem uname_wrapping_destination_faults :
+  check_syscall (SyscallInput.mkInput 160 [uts_wrap_name, 0, 0, 0, 0, 0]
+                   (fun _ => none) uts_wrap_mem)
+    (mkEffect (errno_ret EFAULT) [] []) uts_model
+  = .CheckOk uts_model []
+:= by rfl
+
+theorem uname_wrapping_destination_rejects_the_copy :
+  check_syscall (SyscallInput.mkInput 160 [uts_wrap_name, 0, 0, 0, 0, 0]
+                   (fun _ => none) uts_wrap_mem)
+    (mkEffect 0 [(uts_wrap_name, uts_demo)] []) uts_model
+  = .CheckReject
+:= by rfl
+
+theorem prlimit64_first_read_pins :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 0, 4096, 0, 0] (fun _ => none) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_model
+  = .CheckOk (with_rlimit_core (rlim_bytes 3 7) rlim_model) []
+:= by rfl
+
+/-! …but not an inverted pair.  No Linux reports soft > hard, and this is
+    the only place that claim is written down. -/
+
+theorem prlimit64_read_soft_over_hard_rejected :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 0, 4096, 0, 0] (fun _ => none) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 1 0)] []) rlim_model
+  = .CheckReject
+:= by rfl
+
+/-! Once pinned, a later read must repeat it exactly.  The defector below
+    is well-formed — it is refused for disagreeing with the record, not
+    for being a bad pair. -/
+
+theorem prlimit64_pinned_read_repeats :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 0, 4096, 0, 0] (fun _ => none) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] []) rlim_pinned
+  = .CheckOk rlim_pinned []
+:= by rfl
+
+theorem prlimit64_pinned_read_defector_rejected :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 0, 4096, 0, 0] (fun _ => none) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 2 7)] []) rlim_pinned
+  = .CheckReject
+:= by rfl
+
+/-! dropbear's own call, and the reason the syscall is modeled at all:
+    zero the soft limit, write the hard limit back unchanged.  The
+    recorded pair MOVES to what was set — 3 becomes 0. -/
+
+theorem prlimit64_set_new_soft_replaces_the_record :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 8192, 0, 0, 0] (rlim_src_at 0 7) (fun _ => none))
+    (with_copyins [(8192, 16)] (mkEffect 0 [] [])) rlim_pinned
+  = .CheckOk (with_rlimit_core (rlim_bytes 0 7) rlim_pinned) []
+:= by rfl
+
+/-! A pointer past [TASK_SIZE] fails [access_ok] before
+    [copy_from_user] issues a load.  The EFAULT therefore carries no copy-in
+    provenance, and claiming the unreachable struct as read is rejected. -/
+
+theorem prlimit64_set_access_ok_fault_has_no_copyins :
+  check_syscall
+    (SyscallInput.mkInput 261 [0, 4, 9223372036854775808, 0, 0, 0]
+      (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EFAULT) [] []) rlim_pinned
+  = .CheckOk rlim_pinned []
+:= by rfl
+
+theorem prlimit64_set_access_ok_fault_rejects_copyins :
+  check_syscall
+    (SyscallInput.mkInput 261 [0, 4, 9223372036854775808, 0, 0, 0]
+      (fun _ => none) (fun _ => none))
+    (with_copyins [(9223372036854775808, 16)]
+      (mkEffect (errno_ret EFAULT) [] [])) rlim_pinned
+  = .CheckReject
+:= by rfl
+
+/-! …so a read AFTER that set reports the pair the set installed, and the
+    pair that was there before it is now refused.  Together with the
+    example above this is the whole content of "a set replaces the
+    record"; nothing observable from a single run distinguishes it. -/
+
+theorem prlimit64_read_after_set_reports_the_set_pair :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 0, 4096, 0, 0] (fun _ => none) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 0 7)] [])
+    (with_rlimit_core (rlim_bytes 0 7) rlim_pinned)
+  = .CheckOk (with_rlimit_core (rlim_bytes 0 7) rlim_pinned) []
+:= by rfl
+
+theorem prlimit64_read_after_set_rejects_the_old_pair :
+  check_syscall (SyscallInput.mkInput 261 [0, 4, 0, 4096, 0, 0] (fun _ => none) rlim_out)
+    (mkEffect 0 [(4096, rlim_bytes 3 7)] [])
+    (with_rlimit_core (rlim_bytes 0 7) rlim_pinned)
+  = .CheckReject
+:= by rfl
+
+/- =========================================================================
+   PART 5 — process inputs (argv and the auxv)
+
+   Properties of the initial stack image, which no syscall observes:
+   [Run.run] quantifies over these, so they are inputs to the theorem
+   rather than anything a trace records.
+   ========================================================================= -/
+
+/-! [valid_argv] requires at least one argument (kernel commit
+    dcd46d897adb rewrites an empty [execve] argv to a single empty
+    string), so a reference binary may rely on argv[0] existing.  The
+    rewritten form — a single empty string — stays valid: argv[0] need
+    not be nonempty. -/
+
+/- =========================================================================
+   Credentials — worked examples over the eight id calls
+   ========================================================================= -/
+
+/-! The model a demo run starts in: an ordinary unprivileged launch, its
+    six ids derived from [Cases.Prelude.demo_uid] / [demo_gid] by
+    [State.init_model]. -/
+def demo_model : Model := init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)
+
+/-! A ROOT process: all six ids 0, which is what [State.init_model]
+    builds for a launch by root and what makes
+    [State.creds_privileged] true. -/
+def root_model : Model :=
+  with_creds (Creds.mkCreds 0 0 0 0 0 0 demo_groups) demo_model
+
+/-! A process whose six ids are SIX DIFFERENT NUMBERS.  Nothing at launch
+    looks like this — [State.init_model] collapses each triple to one
+    value — so only a privilege change produces it and no run
+    starts here.  Six distinct values are what make the checks below
+    discriminate: on a state where the uid triple and the gid triple
+    coincide, a dispatcher that wired [getegid] to [cr_euid] would pass. -/
+def split_ids_model : Model :=
+  with_creds (Creds.mkCreds 1000 1001 1002 2000 2001 2002 demo_groups) demo_model
+
+/-! Each reader reads ITS OWN field.  [ENVIRONMENT] twice over: the four
+    answers are distinguishable only on a state with six different ids,
+    and a run whose uid and gid are equal cannot even distinguish
+    [getuid] from [getgid]. -/
+theorem each_reader_reads_its_own_field :
+  check_syscall (SyscallInput.mkInput 174 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 1000 [] []) split_ids_model = .CheckOk split_ids_model []
+  ∧ check_syscall (SyscallInput.mkInput 175 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 1001 [] []) split_ids_model = .CheckOk split_ids_model []
+  ∧ check_syscall (SyscallInput.mkInput 176 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 2000 [] []) split_ids_model = .CheckOk split_ids_model []
+  ∧ check_syscall (SyscallInput.mkInput 177 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 2001 [] []) split_ids_model = .CheckOk split_ids_model []
+/- and no reader will answer any of the other five ids -/
+  ∧ check_syscall (SyscallInput.mkInput 176 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 1000 [] []) split_ids_model = .CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 177 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 1001 [] []) split_ids_model = .CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 175 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 1002 [] []) split_ids_model = .CheckReject
+:= by (repeat constructor) <;> rfl
+
+/-! PRIVILEGED [setuid]: real, effective and saved all become the
+    argument — the transition that gives root away for good, and the
+    reason a privilege drop must set the group ids FIRST.
+    [ENVIRONMENT]: needs uid 0. -/
+theorem privileged_setuid_moves_all_three_ids :
+  check_syscall (SyscallInput.mkInput 146 [1000, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+    (mkEffect 0 [] []) root_model
+  = .CheckOk (with_creds (Creds.mkCreds 1000 1000 1000 0 0 0 demo_groups) demo_model) []
+:= by rfl
+
+/-! -EAGAIN, in the one place it is admissible, and nowhere else.
+    [set_user] and [set_cred_ucounts] allocate only when the REAL uid
+    moves, and neither has a group-side counterpart, so the errno set is
+    [ENOMEM; EAGAIN] for exactly one shape: a USER-id setter, privileged,
+    naming an id other than the current real one.  Move any one of those
+    three and -EAGAIN must be refused.  This is the only place the
+    [user] parameter of [Kernel.Sys.setid_spec] and the [true] arm of
+    [Kernel.Sys.setid_errnos] are exercised in the ACCEPTING direction:
+    an unprivileged run cannot reach a privileged setter at all.
+    [ENVIRONMENT]: needs uid 0. -/
+theorem eagain_only_when_a_privileged_setuid_moves_the_real_uid :
+/- user setter, privileged, real uid moves 0 -> 1000: admissible -/
+  check_syscall (SyscallInput.mkInput 146 [1000, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EAGAIN) [] []) root_model = .CheckOk root_model []
+/- the GROUP setter on the same shape: no set_user, so refused -/
+  ∧ check_syscall (SyscallInput.mkInput 144 [1000, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EAGAIN) [] []) root_model = .CheckReject
+/- privileged, but the real uid does not move: refused -/
+  ∧ check_syscall (SyscallInput.mkInput 146 [0, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EAGAIN) [] []) root_model = .CheckReject
+/- the same call by an unprivileged caller: refused -/
+  ∧ check_syscall (SyscallInput.mkInput 146 [1000, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EAGAIN) [] []) split_ids_model = .CheckReject
+/- -ENOMEM, by contrast, is admissible on every one of those -/
+  ∧ check_syscall (SyscallInput.mkInput 144 [1000, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOMEM) [] []) root_model = .CheckOk root_model []
+:= by (repeat constructor) <;> rfl
+
+/-! UNPRIVILEGED [setuid] moves the EFFECTIVE id and nothing else, and
+    reaches the saved id as well as the real one — a disjunct that is
+    dead in every state an unprivileged run can reach, since [State.init_model]
+    makes the two agree at launch.  [ENVIRONMENT]: needs split ids. -/
+theorem unprivileged_setuid_moves_only_the_effective_id :
+  check_syscall (SyscallInput.mkInput 146 [1000, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+    (mkEffect 0 [] []) split_ids_model
+  = .CheckOk (with_creds (Creds.mkCreds 1000 1000 1002 2000 2001 2002 demo_groups) demo_model) []
+  ∧ check_syscall (SyscallInput.mkInput 146 [1002, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 0 [] []) split_ids_model
+     = .CheckOk (with_creds (Creds.mkCreds 1000 1002 1002 2000 2001 2002 demo_groups) demo_model) []
+  ∧ check_syscall (SyscallInput.mkInput 146 [1003, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect 0 [] []) split_ids_model = .CheckReject
+:= by (repeat constructor) <;> rfl
+
+/-! [setresgid(-1, -1, g)] parks a group in the SAVED gid and touches
+    nothing else — dropbear's way of keeping the utmp group in reach.
+    Unlike [setuid], these calls never move an id the caller did not
+    name.  [ENVIRONMENT]: needs the privilege to name a group the process
+    does not hold. -/
+theorem setresgid_parks_a_group_in_the_saved_id :
+  check_syscall (SyscallInput.mkInput 149 [4294967295, 4294967295, 22, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect 0 [] []) root_model
+  = .CheckOk (with_creds (Creds.mkCreds 0 0 0 0 0 22 demo_groups) demo_model) []
+:= by rfl
+
+/-! [setresuid] (147) past its no-op and -EPERM paths, which nothing
+    else here reaches.  From a launch state all three ids agree,
+    so every unprivileged call either asks for nothing or names an id the
+    process does not hold — meaning no unprivileged run touches the allocating arm,
+    and with it the [user] parameter that is the ONLY difference between
+    [Kernel.Sys.setresid_spec]'s two instantiations.  [ENVIRONMENT]:
+    uid 0. -/
+theorem setresuid_reaches_its_allocating_branch :
+  check_syscall (SyscallInput.mkInput 147 [1000, 1000, 1000, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect 0 [] []) root_model
+  = .CheckOk (with_creds (Creds.mkCreds 1000 1000 1000 0 0 0 demo_groups) demo_model) []
+/- -EAGAIN is admissible: the REAL uid moves, and this is the user
+     setter -/
+  ∧ check_syscall (SyscallInput.mkInput 147 [1000, 1000, 1000, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EAGAIN) [] []) root_model = .CheckOk root_model []
+/- the group twin on the identical shape: no set_user, so refused -/
+  ∧ check_syscall (SyscallInput.mkInput 149 [1000, 1000, 1000, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EAGAIN) [] []) root_model = .CheckReject
+/- -ENOMEM is admissible on both: this arm is past [prepare_creds] -/
+  ∧ check_syscall (SyscallInput.mkInput 149 [1000, 1000, 1000, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOMEM) [] []) root_model = .CheckOk root_model []
+:= by (repeat constructor) <;> rfl
+
+/-! UNPRIVILEGED [setresuid] REARRANGING ids the process already holds:
+    permitted, and it moves them.  This is the arm between the no-op fast
+    path and -EPERM, dead in every state an unprivileged run can reach because a
+    launch gives all three ids one value and leaves nothing to
+    rearrange.  [ENVIRONMENT]: split ids. -/
+theorem unprivileged_setresuid_may_rearrange_held_ids :
+  check_syscall (SyscallInput.mkInput 147 [4294967295, 1002, 4294967295, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect 0 [] []) split_ids_model
+  = .CheckOk (with_creds (Creds.mkCreds 1000 1002 1002 2000 2001 2002 demo_groups) demo_model) []
+/- the real uid does not move here, so -ENOMEM is admissible and
+     -EAGAIN is not -/
+  ∧ check_syscall (SyscallInput.mkInput 147 [4294967295, 1002, 4294967295, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOMEM) [] []) split_ids_model
+     = .CheckOk split_ids_model []
+  ∧ check_syscall (SyscallInput.mkInput 147 [4294967295, 1002, 4294967295, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EAGAIN) [] []) split_ids_model = .CheckReject
+/- one id the process does not hold, and the whole call is refused -/
+  ∧ check_syscall (SyscallInput.mkInput 147 [4294967295, 1003, 4294967295, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect 0 [] []) split_ids_model = .CheckReject
+:= by (repeat constructor) <;> rfl
+
+end LinuxSem.Checks.Cases.Kernel.Sys

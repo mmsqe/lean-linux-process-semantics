@@ -1,0 +1,10 @@
+name = "lean-linux-process-semantics"
+version = "0.1.0"
+defaultTargets = ["LinuxSem"]
+
+[[lean_lib]]
+name = "LinuxSem"
+
+[[lean_exe]]
+name = "decoder"
+root = "Main"

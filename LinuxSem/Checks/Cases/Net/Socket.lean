@@ -1,0 +1,2465 @@
+/-
+  * LinuxSem.Checks.Cases.Net.Socket — worked examples over socket (198),
+      bind (200), listen (201), accept (202), connect (203),
+      getsockname (204), getpeername (205), sendto (206), setsockopt (208),
+      getsockopt (209), shutdown (210), sendmsg (211), accept4 (242)
+
+  Worked cases over `Sys.Net.Socket`, which answers to Linux
+  [net/socket.c]: the examples for the syscalls defined there, and no
+  others.
+
+  `Checks.Examples` keeps what is not per-syscall and re-exports this
+  module.  Each case is read off the specs and checkers of the matching
+  `Sys` module, without running a binary.
+
+  Spelling.  Statements keep their names, and every spelling Lean does not
+  have is supplied below as a local transparent `abbrev`, DEFINITIONALLY
+  EQUAL to what it stands for, so each statement denotes exactly the same
+  claim:
+
+  - `bv_unsigned w` is `(w.toNat : Int)` and `Z_to_bv n z` is
+    `BitVec.ofInt n z`;
+  - `zeqb`/`zleb`/`zltb` are `Z.eqb`/`Z.leb`/`Z.ltb` on `Int`, and
+    `zshiftr` is `Z.shiftr` (`u64_at` below is the only user);
+  - `andb`/`orb`/`negb` are `Bool.and`/`Bool.or`/`Bool.not`;
+  - `Forall p l` is `Stdlib`'s list predicate.  Lean's core has no
+    `List.Forall`, so the inductive is declared here — the same two
+    constructors, so the statements read as written and the
+    `repeat constructor` proofs still close them;
+  - the `FdEntry`/`SockState` CONSTRUCTORS are re-exported under their
+    bare names (`FdChannel`, `FdSocket`, `SkListening`, …) because Lean
+    nests them in the structure's namespace;
+  - `m_fd`/`m_vm`/`m_fsys`/`m_proc`/`m_lim`/`m_time` are the Model
+    field projections applied as functions (`m_stdin`, `m_urandom`,
+    `m_net` and `m_fds` already are functions).
+
+  Proofs.  `rfl` — kernel reduction of a closed goal — closes a concrete
+  example here everywhere EXCEPT the five checkers that read a `word`
+  argument through `Sys.Syscall.sint32` (socket 198, bind 200, connect
+  203, setsockopt 208, getsockopt 209): there `rfl` cannot reduce the `if`
+  that `sint32` builds, and those examples go through the two routes
+  documented under "The `rfl`-wall route" below.  `rfl` and not `decide`
+  for the rest: `check_result` carries a `Model` and so has no
+  `DecidableEq`.
+
+  What the examples pin: the SOCK_PACKET boundary above the protocol
+  range, SOCK_DGRAM/SOCK_RAW inside it, the copy-in ledger, the connect
+  state machine, the setsockopt/getsockopt level split, accept (202) /
+  accept4 (242), the channel separation, the wrap cases, read on a
+  connected socket (63), sendto and sendmsg (206/211), shutdown (210),
+  socketpair (199) and the recvfrom/recvmsg pair (207/212) — including
+  every `CheckOk` state transition, which is why the fixture models
+  (`accepted_socket_model`, `socket_states_model`,
+  `reset_pending_socket_model`, …) are all exercised by a checked
+  equality rather than merely written down.
+
+  `socket_write_never_admitted` and `socket_writev_never_admitted` are
+  the two headline lemmas.  They are not about the `rfl` wall but about
+  the proof's SHAPE, and the shape is fixed by `cases o` before any
+  unfolding (see the note at their own position).  Neither needs a
+  `bind`-elimination lemma of its own, and neither touches a spec.
+
+  The quantified lemmas and the two refutations.  The statements
+  quantified over free variables carry ordinary tactic proofs.  The three
+  negated equalities are NOT `rfl`: their conclusion is an inequality of
+  two `check_result`s, which has no `DecidableEq`, so each one computes
+  the value with `rfl` and then refutes the equation between constructors.
+-/
+import LinuxSem.Checks.Cases.Prelude
+import LinuxSem.Checks.Sys.Prelude
+import LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite
+import LinuxSem.LinuxProcessSem.Sys.Net.Socket
+import LinuxSem.LinuxProcessSem.Sys.Uaccess
+
+set_option autoImplicit false
+set_option maxRecDepth 1000000
+
+open LinuxSem.Riscv
+open LinuxSem.LinuxProcessSem
+open LinuxSem.LinuxProcessSem.Run
+open LinuxSem.LinuxProcessSem.StackLayout
+open LinuxSem.LinuxProcessSem.MemImageType
+open LinuxSem.LinuxProcessSem.RiscvSemantics
+open LinuxSem.LinuxProcessSem.Sys.Uapi
+open LinuxSem.LinuxProcessSem.Sys.Syscall
+open LinuxSem.LinuxProcessSem.Sys.Fs.ReadWrite
+open LinuxSem.LinuxProcessSem.Sys.Net.Socket
+open LinuxSem.LinuxProcessSem.Sys.Uaccess
+open LinuxSem.Checks
+open LinuxSem.Checks.ExecutableSpecs
+open LinuxSem.Checks.Sys.Prelude
+open LinuxSem.Checks.Cases.Prelude
+
+namespace LinuxSem.Checks.Cases.Net.Socket
+
+/-! ## The prelude's abbreviations, restored
+
+    Each of these is a transparent alias, so it
+    changes no statement's meaning. -/
+
+/-- `bv_unsigned` (`BvBase`): the unsigned value of a bitvector, in
+    `Int` so that range arithmetic does not wrap. -/
+abbrev bv_unsigned {n : Nat} (w : BitVec n) : Int := (w.toNat : Int)
+
+/-- `Z_to_bv`: an `Int` re-wrapped at width `n`. -/
+abbrev Z_to_bv (n : Nat) (z : Int) : BitVec n := BitVec.ofInt n z
+
+/-- `Z.eqb` on `Int`. -/
+abbrev zeqb {α : Type} [BEq α] (a b : α) : Bool := a == b
+
+/-- `Z.leb` on `Int`. -/
+abbrev zleb (a b : Int) : Bool := decide (a ≤ b)
+
+/-- `Z.ltb` on `Int`. -/
+abbrev zltb (a b : Int) : Bool := decide (a < b)
+
+/-- `Z.shiftr`: arithmetic shift right, i.e. floor division by
+    `2 ^ n`. -/
+abbrev zshiftr (a n : Int) : Int := a / 2 ^ n.toNat
+
+/-- `andb`, i.e. `Bool.and`. -/
+abbrev andb (a b : Bool) : Bool := a && b
+/-- `orb`, i.e. `Bool.or`. -/
+abbrev orb (a b : Bool) : Bool := a || b
+/-- `negb`, i.e. `Bool.negb`. -/
+abbrev negb (a : Bool) : Bool := !a
+
+/-- `Stdlib`'s `List.Forall` — the same two constructors.  `Forall p l`
+    is `p` holding at every element; Lean's core list library has no
+    counterpart, so it is declared here rather than restating the four
+    `Forall` examples as `∀ x ∈ l, …` (which would change the statements
+    and lose the `repeat constructor` shape). -/
+inductive Forall {α : Type} (p : α → Prop) : List α → Prop where
+  | nil : Forall p []
+  | cons {a : α} {l : List α} (h : p a) (t : Forall p l) : Forall p (a :: l)
+
+/-! ### The `rfl`-wall route: how a `sint32`-reading checker is evaluated
+
+    The route, with the measurements behind it.  The concrete `Example`s
+    of this file that reach a checker reading a `word` argument through
+    `Sys.Syscall.sint32` (socket 198, bind 200, connect 203, setsockopt
+    208, getsockopt 209) are the ones plain `rfl` cannot close on the
+    guard SHAPE this note measures: `rfl` is KERNEL reduction, and the
+    kernel cannot get through a test that compares an `Int.ofNat` of a
+    `BitVec.toNat`,
+
+      `def narrow (w : word) : Int :=
+         let u : Int := ((abi_low32 w).toNat : Int)
+         if u < 2 ^ 31 then u else u - 2 ^ 32`
+
+    `Sys.Syscall.sint32` WAS written exactly that way.  On toolchain
+    v4.35 the divergence below spread out of `rfl` into every `simp`/`rw`
+    that unfolds such a definition, so `sint32` itself is now written
+    with the test on the `Nat` (`let n : Nat := (abi_low32 w).toNat; if n
+    < 2 ^ 31 then …`, the same function) and can be unfolded again.  THE
+    WALL IS NOT GONE: it still stands in front of the same shape wherever
+    else it occurs — `Sys.Syscall.nfds_signed`, `StateVm.lazy_interior`
+    — which is why the routes below remain the
+    recipe.  The measurements are stated at `narrow`.
+
+    MEASURED, on this toolchain, at `maxRecDepth` 1e6 / 1e7:
+
+    * `example : sint32 (2 : word) = 2 := by rfl`, while `sint32` was
+      spelled as `narrow` -- "maximum recursion depth has been reached";
+      the unifier diverges on the `Decidable` instance for
+      `↑(BitVec.toNat (abi_low32 2)) < 2 ^ 31`.
+    * The minimal witness, with no project imports, is narrower than the
+      cast: `decide ((2 : Int) < 2147483648) = true` IS `rfl`-closable, and
+      so is `decide ((2 : word).toNat < 2 ^ 31) = true`; what diverges is
+      the **`Int`** comparison once an operand is an `Int.ofNat` of a
+      `BitVec.toNat` (`Int.decLt` is `(b - (a + 1)).decNonneg`, a
+      `Nat.brecOn` recursion), and it diverges whether the bound is written
+      `2147483648` or `2 ^ 31`.
+    * `example : sint32 (2 : word) = 2 := by decide` -- CLOSES, at either
+      spelling.  The `decide` TACTIC evaluates what the unifier will not;
+      heartbeats are not the issue (the same goal is instant at 1e6).
+
+    So the modelling was never in doubt; what is hard is the proof TERM.
+    Two routes give one, and both are used below:
+
+    ROUTE A (the constructor test, for a `≠`).  `check_result` carries a
+    `Model`, and `Model`'s `IoState` holds FUNCTIONS
+    (`iost_stdin : Nat → Option byte`), so `check_result` has no
+    `DecidableEq` and an equality of two `check_result`s cannot be
+    `decide`d.  The CONSTRUCTOR can be: project it to a `Bool` with
+    `isUnmodeledR` below, `by decide` the projection (the tactic computes
+    the whole checker -- measured at 0.2-0.5 s), and reflect it back with
+    `isUnmodeledR_eq_true`, which is `cases` + `simp` and mentions no
+    checker at all.  `ne_checkUnmodeled_of_code` is the refutation form,
+    and it is how the `≠` examples are pinned WITHOUT naming the value the
+    arm answers with.
+
+    ROUTE B (the payload test — `eval_check`, used for `= .CheckUnmodeled`,
+    `= .CheckReject` and `= .CheckOk m evs` alike).  Route A cannot reach
+    the model, so here the goal is made to REDUCE instead.  `eval_check`
+    does it in four steps, and the order is load-bearing:
+
+    1. `simp only [<the answering helper>, <the dispatch definitions>,
+       checked_table, lookup_ca]` resolves the 90-arm `checked_table`
+       lookup WITHOUT reducing a single `Decidable` instance.  `rfl` and
+       `congr` cannot do this step: both `whnf` the goal, whnf'ing
+       `arm_socket.ca_check i eff m` continues into `check_socket` and so
+       into the stuck `sint32` `ite`.  That is why the dispatch is
+       resolved by `simp` and not by a `rfl` bridge lemma.
+    2. `simp [in_arg]` reduces the `in_arg` projections of the input.
+    3. `simp [<the checker>, int32, fd32, int32_neg, sint32, abi_low32]`
+       unfolds the checker and normalises `sint32` at its (now literal)
+       argument.  This is the step that matters: with `abi_low32` in the
+       set, `↑(BitVec.toNat (abi_low32 2#64))` becomes the literal `2`, and
+       `simp`'s own arithmetic lemmas discharge the `Int` comparison -- the
+       same reduction `by decide` performs above.  (`int32`/`fd32` are in
+       the set because the dispatch applies them to the arguments.)
+    4. `rfl` closes what is left: the checker body is by now an `if`-chain
+       whose conditions are `Bool` and `Int` equalities between literals,
+       and the kernel reduces THOSE without trouble.  `Int` `<` on a cast
+       operand is the one shape it cannot, and step 3 removes it.
+
+    With `sint32` normalised the kernel no longer meets the instance it
+    cannot unfold, which is exactly the obstruction.
+    Nothing here is `native_decide`: every proof is an ordinary proof term,
+    so no extra postulate enters the library.
+
+    Two traps found while writing these proofs, both worth knowing:
+    * `(repeat constructor) <;> ...` does NOT work on these goals: `Eq`'s
+      `constructor` is `Eq.refl`, whose implicit defeq check is exactly the
+      divergent unification.  Use `(repeat apply And.intro)` instead — it
+      fails fast on a non-`And` goal and never attempts `Eq.refl`.
+    * the per-goal `simp` lists are goal-dependent, so the
+      `unusedSimpArgs` linter fires on the entries a goal does not use;
+      `eval_check` turns that linter off for its own span. -/
+
+/-- `check_result`'s constructor as a `Bool`: `true` exactly at
+    `CheckUnmodeled`.  Constructor-only ON PURPOSE -- it must not touch the
+    `Model`, which is what lets `by decide` compute it. -/
+def isUnmodeledR : check_result → Bool
+  | .CheckUnmodeled => true
+  | _ => false
+
+/-- Route A's reflection.  Mentions no checker, so it is reusable for every
+    arm: a `by decide` fact about `isUnmodeledR r` gives the equality of
+    `check_result`s that `rfl` cannot. -/
+theorem isUnmodeledR_eq_true (r : check_result) :
+    isUnmodeledR r = true ↔ r = .CheckUnmodeled := by
+  cases r <;> simp [isUnmodeledR]
+
+/-- And the refutation: a checker that projects to `false` is not
+    `CheckUnmodeled`.  This is the `≠` form, and it never has to name (or
+    reduce) the value the arm answers with. -/
+theorem ne_checkUnmodeled_of_code (r : check_result)
+    (h : isUnmodeledR r = false) : r ≠ .CheckUnmodeled := by
+  intro hr
+  rw [hr] at h
+  exact Bool.noConfusion h
+
+/-- Route B, as one tactic: resolve the dispatch table, normalise `sint32`,
+    and let the kernel close the remaining `if`-chain.  See the route note
+    above for why each step is where it is.
+
+    The answering helper the goal was written with (`socket_answering`,
+    `connect_answering_c`, …) is unfolded by the CALL SITE, with
+    `try unfold …`, because a `macro` resolves the identifiers in its body
+    at its own definition site and those helpers are declared further down
+    this file.  A goal written directly as `check_syscall …` needs none.
+
+    All three `simp`s carry `failIfUnchanged := false`: which of them has
+    work to do depends on the goal (a goal already at `check_*` level has
+    nothing for the first), and `simp`'s default is to make that an error.
+    The closing step is `try rfl`, not `rfl`: on the goals where `simp`
+    finishes the whole reduction there is nothing left for it. -/
+macro "eval_check" : tactic =>
+  `(tactic|
+    set_option linter.unusedSimpArgs false in
+    (simp (config := { failIfUnchanged := false }) only [
+        LinuxSem.Checks.ExecutableSpecs.check_syscall,
+        LinuxSem.Checks.Sys.Dispatch.CheckedTable.check_syscall,
+        LinuxSem.Checks.Sys.Dispatch.check_syscall,
+        LinuxSem.Checks.Sys.Dispatch.checked_table,
+        LinuxSem.Checks.Sys.Dispatch.lookup_ca]
+     simp (config := { failIfUnchanged := false }) [in_arg]
+     simp (config := { failIfUnchanged := false }) [
+        LinuxSem.Checks.Sys.Net.Socket.check_socket,
+        LinuxSem.Checks.Sys.Net.Socket.check_bind,
+        LinuxSem.Checks.Sys.Net.Socket.check_connect,
+        LinuxSem.Checks.Sys.Net.Socket.check_setsockopt,
+        LinuxSem.Checks.Sys.Net.Socket.check_getsockopt,
+        LinuxSem.LinuxProcessSem.Sys.Net.Socket.int32_neg,
+        sint32,
+        LinuxSem.LinuxProcessSem.Sys.Syscall.int32,
+        LinuxSem.LinuxProcessSem.Sys.Syscall.fd32,
+        LinuxSem.LinuxProcessSem.Sys.Syscall.abi_low32,
+        LinuxSem.LinuxProcessSem.Sys.Fs.File.z_ldiff,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.z_land,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.z_lor,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_TYPE_MASK,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_CLOEXEC,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_NONBLOCK,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.NPROTO,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_MAX,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.AF_INET,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_PACKET,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.IPPROTO_MAX,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_STREAM,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_DGRAM,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_RAW,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_SEQPACKET,
+        LinuxSem.LinuxProcessSem.Sys.Uapi.SOCK_DCCP]
+     try rfl))
+
+/-- The conjunct closer the examples below use: route A when the answer is
+    the nullary `CheckUnmodeled` (that one needs no payload comparison, and
+    `by decide` computes it outright), route B for everything else.  Route A
+    comes first because it is the cheaper of the two and because route B's
+    `rfl` cannot see a `CheckUnmodeled` payload either way; a goal that route
+    A cannot decide simply falls through. -/
+macro "close_check" : tactic =>
+  `(tactic| first
+    | exact (isUnmodeledR_eq_true _).mp (by decide)
+    | eval_check)
+
+/-! ## The record constructors, restored the same way -/
+
+abbrev FdChannel (chan : word) : FdEntry := FdEntry.FdChannel chan
+abbrev FdFile (p : Fs.path) (offset : word) : FdEntry := FdEntry.FdFile p offset
+abbrev FdFileW (p : Fs.path) (offset : word) : FdEntry := FdEntry.FdFileW p offset
+abbrev FdDir : FdEntry := FdEntry.FdDir
+abbrev FdSocket (sk : SockState) : FdEntry := FdEntry.FdSocket sk
+
+abbrev SkFresh : SockState := SockState.SkFresh
+abbrev SkBound : SockState := SockState.SkBound
+abbrev SkListening : SockState := SockState.SkListening
+abbrev SkConnected (peer : PeerAddr) (chan : word) (rx : NetStream) : SockState :=
+  SockState.SkConnected peer chan rx
+abbrev SkReset (peer : PeerAddr) (chan : word) : SockState :=
+  SockState.SkReset peer chan
+
+abbrev mkPeer (a : BitVec 32) (p : BitVec 16) : PeerAddr := PeerAddr.mkPeer a p
+
+abbrev m_fd (m : Model) : FdState := m.m_fd
+abbrev m_vm (m : Model) : VmState := m.m_vm
+abbrev m_fsys (m : Model) : FsState := m.m_fsys
+abbrev m_proc (m : Model) : ProcState := m.m_proc
+abbrev m_lim (m : Model) : LimState := m.m_lim
+abbrev m_time (m : Model) : TimeState := m.m_time
+
+/- -------------------------------------------------------------------------
+   Sockets: the claims no live run can show
+   ------------------------------------------------------------------------- -/
+
+/-! WRITING A SOCKET IS NEVER ADMITTED — no execution, no input, no
+    socket state.  This is the most important claim in the socket work,
+    and it is a lemma for two reasons.  It is UNIVERSALLY QUANTIFIED,
+    where a live run exhibits one execution.  And a guest cannot reach
+    the arm on its own: reaching it needs a CONNECTED socket.
+    [connect] (203) is dispatched, but it cannot produce
+    one: [Net.Socket.connect_spec] declines the connection ATTEMPT, so
+    no modeled execution ever holds a connected socket it dialled.  And
+    a guest that took the SIGPIPE this arm exists to avoid dies by
+    signal 13, which says nothing about the write's return.
+
+    Why it matters that the answer is [Unmodeled] and not an errno: on a
+    connection the peer has reset, write(2) returns -EPIPE AND raises
+    SIGPIPE, whose default action kills the thread group
+    (net/core/stream.c:sk_stream_error, kernel/signal.c:get_signal,
+    v6.12).  A spec's outcomes are [Ok] and [Unmodeled] and nothing
+    else, so answering -EPIPE would assert the process SURVIVED — a
+    confidently wrong answer of exactly the class [Equivalence.modeled]
+    cannot see.  A later change that admits ANY write to a socket
+    breaks this lemma, which is the point of stating it. -/
+/-! The `bind`-chain destruction is done by hand, and
+    the three steps that made `rcases` fail are each explicit:
+
+    1. `cases o` FIRST.  `bind`'s body is a `match` on the outcome, so the
+       chain only reduces once `o` is a constructor; leaving `o` a
+       variable is what left the `Exists` body stuck in a `match`.
+    2. `simp only [write_spec, LinuxSem.LinuxProcessSem.bind]`
+       — the QUALIFIED `bind`, because bare `bind` is ambiguous with
+       `Bind.bind` and `simp only [bind]` then reports "invalid simp
+       theorem".  `inputSpec` is definitionally `pure`, so the first
+       component pins `x = i`, `m1 = m`, `evs1 = []`.
+    3. `rw [Hfd] at hK2` — the `fd_lookup` equation is rewritten into the
+       hypothesis BEFORE any case split, and the socket arm is then
+       `unmodeled`, whose only inhabitant with an `.ok` shape is absurd.
+
+    So no `bind`-elimination lemma of its own was needed and no modelling
+    changed: the statement is proved in full. -/
+theorem socket_write_never_admitted : ∀ fd buf count i m sk o,
+    fd_lookup (m_fds m) fd = some (FdSocket sk) →
+    write_spec fd buf count i m o → o = .unmodeled := by
+  intro fd buf count i m sk o Hfd Hspec
+  cases o with
+  | unmodeled => rfl
+  | ok y m2 evs =>
+    simp only [write_spec, LinuxSem.LinuxProcessSem.bind] at Hspec
+    obtain ⟨i', m1, evs1, evs2, hIn, hK, _⟩ := Hspec
+    simp only [inputSpec, input, Outcome.ok.injEq] at hIn
+    obtain ⟨rfl, rfl, rfl⟩ := hIn
+    obtain ⟨x2, m1b, evs1b, evs2b, hGM, hK2, _⟩ := hK
+    simp only [getModelSpec, getModel, Outcome.ok.injEq] at hGM
+    obtain ⟨rfl, rfl, rfl⟩ := hGM
+    rw [Hfd] at hK2
+    simp only [unmodeled] at hK2
+    exact nomatch hK2
+
+/-! The same for the vectored form, AT EVERY COUNT.  There is no bound
+    on [iovcnt] here, and that is the whole content of the lemma: the
+    socket arm of [Specs.writev_spec] is [Specs.writev_buf_gap] before
+    the count or the array is looked at, so no count — over [IOV_MAX] or
+    not — reaches an answer. -/
+
+/-! The same proof at the vectored entry point; the only difference is
+    which arm the `fd_lookup`-rewriting `simp` set has to normalise.  The
+    socket arm there is `writev_buf_gap`, which is `unmodeled` by
+    definition — that is the lemma's whole content, and it is why no
+    `iovcnt`-dependent reasoning appears. -/
+theorem socket_writev_never_admitted : ∀ fd iov iovcnt i m sk o,
+    fd_lookup (m_fds m) fd = some (FdSocket sk) →
+    writev_spec fd iov iovcnt i m o → o = .unmodeled := by
+  intro fd iov iovcnt i m sk o Hfd Hspec
+  cases o with
+  | unmodeled => rfl
+  | ok y m2 evs =>
+    simp only [writev_spec, LinuxSem.LinuxProcessSem.bind] at Hspec
+    obtain ⟨i', m1, evs1, evs2, hIn, hK, _⟩ := Hspec
+    simp only [inputSpec, input, Outcome.ok.injEq] at hIn
+    obtain ⟨rfl, rfl, rfl⟩ := hIn
+    obtain ⟨x2, m1b, evs1b, evs2b, hGM, hK2, _⟩ := hK
+    simp only [getModelSpec, getModel, Outcome.ok.injEq] at hGM
+    obtain ⟨rfl, rfl, rfl⟩ := hGM
+    rw [Hfd] at hK2
+    simp only [writev_buf_gap, unmodeled] at hK2
+    exact nomatch hK2
+
+theorem socket_is_readable : ∀ sk,
+  readable_fd (FdSocket sk) = some (ReadableFd.RdSocket sk)
+:= by
+  intro sk
+  rfl
+
+/-! THE CHANNEL SEPARATION, with its bound made explicit rather than
+    left implicit.  [conn_channel ix] is [ix + 3] in a 64-bit word, so
+    below the wrap two connections never share a channel and no
+    connection is reported on stdin's (0), stdout's (1) or stderr's (2).
+    AT the wrap both fail: at [ix = 2 ^ 64 - 3] the next connection is
+    reported on channel 0, and a target could then read that connection
+    where the source read stdin and produce the same trace.  Nothing in
+    the model bounds the number of accepts — [Run.run]'s [lim] is the
+    allocation budget in bytes, not a step count — so the hypothesis is
+    a real restriction and not a formality.
+
+    [Net.Socket.accept4_spec]'s guard is what DISCHARGES it: it refuses
+    to hand a connection over from [ix = 2^64 - 3] on, so every index the
+    model actually issues a channel at satisfies this hypothesis.
+    [guarded_conn_channel_not_std] and [guarded_conn_channel_injective]
+    below are these two with the hypothesis replaced by the guard's own
+    test, and are the forms to cite. -/
+theorem conn_channel_unsigned : ∀ ix,
+  (bv_unsigned ix < 2 ^ 64 - 3) →
+  bv_unsigned (conn_channel ix) = (bv_unsigned ix + 3)
+:= by
+  intro ix H
+  simp only [bv_unsigned] at H
+  have hx : ix.toNat < 2 ^ 64 - 3 := by omega
+  simp only [bv_unsigned, conn_channel]
+  rw [BitVec.toNat_add]
+  have h3 : (BitVec.ofInt 64 3).toNat = 3 := by decide
+  rw [h3, Nat.mod_eq_of_lt (by omega)]
+  omega
+
+theorem conn_channel_injective : ∀ ix1 ix2,
+  (bv_unsigned ix1 < 2 ^ 64 - 3) →
+  (bv_unsigned ix2 < 2 ^ 64 - 3) →
+  conn_channel ix1 = conn_channel ix2 → bv_unsigned ix1 = bv_unsigned ix2
+:= by
+  intro ix1 ix2 H1 H2 Heq
+  have h1 := conn_channel_unsigned ix1 H1
+  have h2 := conn_channel_unsigned ix2 H2
+  have hc := congrArg bv_unsigned Heq
+  rw [h1, h2] at hc
+  omega
+
+theorem conn_channel_not_std : ∀ ix,
+  (bv_unsigned ix < 2 ^ 64 - 3) →
+  (2 < bv_unsigned (conn_channel ix))
+:= by
+  intro ix H
+  rw [conn_channel_unsigned ix H]
+  have := ix.isLt
+  simp only [bv_unsigned] at *
+  omega
+
+/- -------------------------------------------------------------------------
+   Sockets: an ACCEPTED socket, and the MEMBERSHIP of accept's errno set
+
+   A guest cannot dial an accepted socket itself, since [connect] (203)
+   declines the connection ATTEMPT.  A live run where a connection
+   arrives shows a successful accept, not the errno set, so each errno
+   below is presented to the checker by hand.  The listening socket is
+   built here for the same reason — the set is folded over without a
+   run.
+
+   These cases are what pins WHICH errnos [Specs.accept_errnos] holds.
+   `Checks.Progress`'s receptivity witness takes the errno side of
+   the [alt] and needs only that the list is NON-EMPTY, and
+   non-emptiness is not membership — so without these cases a model
+   that hung an arbitrary errno off accept would pass every theorem in
+   the proof stack.
+   ------------------------------------------------------------------------- -/
+
+/-! A model whose fd 3 is a LISTENING socket, written out rather than
+    reached.  fds 0-2 are the standard channels, exactly as
+    [State.init_model] leaves them, so the descriptor an accept has to
+    hand back is 4 — a fact about this table, not a number chosen to
+    make a case pass.
+
+    [State.mkModel] leaves the accept queue at [State.net_silent] and
+    the handed-over count at 0, which is what an unaccepted listening
+    socket wants; the credentials are set to [demo_creds] so this model
+    runs as the same ordinary user every other worked example does. -/
+def listening_socket_model : Model :=
+  with_creds demo_creds
+    (mkModel
+       [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+         (3, FdSocket SkListening) ]
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+
+/-! The model a successful accept must leave behind.  The new
+    descriptor carries the head connection's peer and its script, on the
+    channel [Specs.conn_channel] names for it (3 — the first channel
+    that is not stdio); the queue has advanced past the connection just
+    taken; and the handed-over count is 1.  [State.fd_insert] prepends,
+    which is why the new entry heads the table.
+
+    Those last two are exactly what [State.with_accepted] does and the
+    only way to say them — it is the sole setter that advances the queue
+    and bumps [m_conn_ix], and the fd table it is given here is written
+    out in full rather than derived. -/
+def accepted_socket_model : Model :=
+  with_accepted
+    [ (4, FdSocket (SkConnected (mkPeer (Z_to_bv 32 0) (Z_to_bv 16 0)) 3 NFin)),
+      (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+      (3, FdSocket SkListening) ]
+    listening_socket_model
+
+/-! accept4(3, NULL, NULL, 0) — syscall 242, the arm that takes its
+    flags from a4 rather than pinning them to 0 — answering [r]. -/
+def accept4_answering (m : Model) (r : word) : check_result :=
+  check_syscall (SyscallInput.mkInput 242 [3, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+    (mkEffect r [] []) m
+
+/-! THE ACCEPTED STATE, reached.  Everything the success arm builds is
+    pinned in one equality: the descriptor, the peer, the channel, the
+    remaining script, the advanced queue, and the bumped count. -/
+theorem accept_hands_over_the_head_connection :
+  accept4_answering listening_socket_model 4 = check_result.CheckOk accepted_socket_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! Was a return ADMITTED?  [CheckOk] and nothing else — a
+    [CheckUnmodeled] is the model declining to answer, not accepting. -/
+def accept4_admits (r : word) : Bool :=
+  (match accept4_answering listening_socket_model r with
+  | check_result.CheckOk _ _ => true
+  | _ => false
+  )
+
+/-! THE MEMBERSHIP OF [Specs.accept_errnos], pinned as a SET and not as
+    a head.  Of every value the model's error window can encode —
+    [Prelude.errnos_ok] admits exactly 1..4095 — the accept arm
+    accepts these THREE and refuses the other 4092.  Dropping an errno
+    from the list breaks this case, and so does adding one: that is the
+    difference between pinning a set and naming its head, and it is what
+    stops an arbitrary errno from being hung off accept unnoticed.
+    The order here is [filter]'s, hence numeric (12, 23, 24), not the
+    order [Specs.accept_errnos] is written in. -/
+theorem accept_errno_set_is_exactly_these_three :
+  ((List.range' 1 4095).map Int.ofNat).filter (fun e => accept4_admits (errno_ret e))
+  = [ENOMEM, ENFILE, EMFILE]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The success side is a set of one, pinned the same way: over every
+    descriptor [State.alloc_fd]'s 4096-candidate scan could name, only
+    the lowest free one is admitted.  Four of the 4096 (0, 1, 2, 3) are
+    refused earlier still, because they are already open — a return that
+    reissues a live descriptor is rejected before it is compared with
+    the allocator's answer. -/
+theorem accept_success_return_is_exactly_the_lowest_free_fd :
+  ((List.range' 0 4096).map Int.ofNat).filter (fun n => accept4_admits (Z_to_bv 64 n))
+  = [4]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The three spelled out one at a time — the enumeration above in the
+    form a reader checks by eye.  An admitted errno leaves the model
+    ALONE: no descriptor is handed out and the connection stays at the
+    head of the queue, because steps 1 through 7 of [do_accept] reach
+    [reqsk_queue_remove] only once every error exit is past. -/
+theorem accept_errno_arms_leave_the_queue_alone :
+  accept4_answering listening_socket_model (errno_ret ENOMEM)
+    = check_result.CheckOk listening_socket_model []
+  ∧ accept4_answering listening_socket_model (errno_ret EMFILE)
+    = check_result.CheckOk listening_socket_model []
+  ∧ accept4_answering listening_socket_model (errno_ret ENFILE)
+    = check_result.CheckOk listening_socket_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! Three errnos a real accept CAN return and this model must not.
+    -EAGAIN is a non-blocking socket's, and the model has no notion of
+    one ([SOCK_NONBLOCK] is declined as unmodeled rather than recorded);
+    -EINTR needs a signal, and there are none; -EOPNOTSUPP is for a
+    socket type that cannot accept, and only AF_INET/SOCK_STREAM sockets
+    ever enter the fd table.  Each is refused, and refusing them is what
+    makes the list above a set rather than a lower bound. -/
+theorem accept_refuses_errnos_outside_the_set :
+  accept4_answering listening_socket_model (errno_ret EAGAIN) = check_result.CheckReject
+  ∧ accept4_answering listening_socket_model (errno_ret EINTR) = check_result.CheckReject
+  ∧ accept4_answering listening_socket_model (errno_ret EOPNOTSUPP)
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The arms AROUND the accepted state, in the kernel's order.  The
+    socket accept just handed over is not TCP_LISTEN, so accepting it is
+    -EINVAL; a channel fd is -ENOTSOCK; an unknown fd is -EBADF, decided
+    by [fdget] BEFORE the flags are looked at (fd 9 here carries a flag
+    bit that would otherwise be -EINVAL); an unknown flag bit is
+    -EINVAL; and [SOCK_CLOEXEC] is accepted and ignored, so it lands on
+    the same accepted state as no flags at all. -/
+theorem accept_arms_around_the_accepted_state :
+  check_syscall (SyscallInput.mkInput 242 [4, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EINVAL) [] []) accepted_socket_model
+    = check_result.CheckOk accepted_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 242 [1, 0, 0, 0, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOTSOCK) [] []) listening_socket_model
+     = check_result.CheckOk listening_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 242 [9, 0, 0, 1, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EBADF) [] []) listening_socket_model
+     = check_result.CheckOk listening_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 242 [3, 0, 0, 1, 0, 0] (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EINVAL) [] []) listening_socket_model
+     = check_result.CheckOk listening_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 242 [3, 0, 0, 524288, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect 4 [] []) listening_socket_model
+     = check_result.CheckOk accepted_socket_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The two arguments the model DECLINES rather than guesses stay
+    [CheckUnmodeled] on a listening socket — the state where an errno or
+    a descriptor would otherwise be admissible.  Neither is an errno,
+    and neither may become one by accident: [SOCK_NONBLOCK] marks the
+    new file O_NONBLOCK, which the model cannot represent, and a
+    non-NULL address argument would report a peer address the model
+    cannot predict. -/
+theorem accept_declined_arguments_are_unmodeled :
+  check_syscall (SyscallInput.mkInput 242 [3, 0, 0, 2048, 0, 0] (fun _ => none) (fun _ => none))
+    (mkEffect 4 [] []) listening_socket_model = check_result.CheckUnmodeled
+  ∧ check_syscall (SyscallInput.mkInput 242 [3, 4096, 4104, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect 4 [] []) listening_socket_model = check_result.CheckUnmodeled
+  /- AND THE FLAG BIT THAT IS ACCEPTED, so the two declines above read as
+     a boundary rather than as accept4 having gone quiet.  Both are
+     [CheckUnmodeled], so on their own they survive any change that only
+     ever declines MORE -- the flag word growing a third refused bit, or
+     the whole arm going unmodeled -- which is the change this lemma
+     exists to notice.  [SOCK_CLOEXEC] is the neighbour in the same
+     word: accepted, ignored, and landing on the accepted state. -/
+  ∧ check_syscall (SyscallInput.mkInput 242 [3, 0, 0, 524288, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect 4 [] []) listening_socket_model
+     = check_result.CheckOk accepted_socket_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+
+/- -------------------------------------------------------------------------
+   Sockets: the channel space runs out before it wraps
+
+   All of these are here for reason 4 at the top of `Checks.Examples` —
+   the environment cannot be made to produce them — with reason 3 on top:
+   [State.m_conn_ix] is model-internal state, and driving it to the value
+   these cases pin needs 2^64 successful accepts, which no real run can
+   perform and no observation of a real run would reveal if it could.
+   ------------------------------------------------------------------------- -/
+
+/-! WHAT THE GUARD PREVENTS, stated first so the rest of the group reads
+    as a fix rather than as arithmetic.  At [ix = 2^64 - 3] the channel
+    [Net.Socket.conn_channel] names is 0 — STDIN's — and at the two
+    indices after it, stdout's and stderr's.  A target could then read a
+    CONNECTION where the source read STANDARD INPUT and emit the same
+    trace, so [Equivalence.equiv] would hold between two programs that do
+    different things and [Equivalence.strong_universal_T] would be
+    satisfied by a target that is not equivalent.  That is what makes
+    this an unsoundness in the top-level theorem rather than a caveat on
+    a helper lemma. -/
+theorem conn_channel_at_the_wrap_is_stdin_stdout_stderr :
+  bv_unsigned (conn_channel (Z_to_bv 64 (two_pow_64 - 3))) = 0
+  ∧ bv_unsigned (conn_channel (Z_to_bv 64 (two_pow_64 - 2))) = 1
+  ∧ bv_unsigned (conn_channel (Z_to_bv 64 (two_pow_64 - 1))) = 2
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! [Net.Socket.conn_ix_exhausted] is exactly the complement of the
+    hypothesis [conn_channel_not_std] and [conn_channel_injective] carry,
+    which is what turns those two from lemmas with an assumption into
+    lemmas about every index [accept] will still hand a connection over
+    at.  The guard tests this at the hand-over itself, so the separation
+    is POINTWISE and needs no run-level induction to state. -/
+theorem conn_ix_not_exhausted_lt : ∀ ix,
+  conn_ix_exhausted ix = false → (bv_unsigned ix < two_pow_64 - 3)
+:= by
+  intro ix H
+  unfold conn_ix_exhausted at H
+  have h : ¬ (two_pow_64 - 3 ≤ (ix.toNat : Int)) := by
+    simpa [decide_eq_false_iff_not] using H
+  have h' : (ix.toNat : Int) < two_pow_64 - 3 := Int.not_le.mp h
+  simpa [bv_unsigned] using h' 
+
+theorem guarded_conn_channel_not_std : ∀ ix,
+  conn_ix_exhausted ix = false → (2 < bv_unsigned (conn_channel ix))
+:= by
+  intro ix H
+  exact conn_channel_not_std ix (conn_ix_not_exhausted_lt ix H)
+
+theorem guarded_conn_channel_injective : ∀ ix1 ix2,
+  conn_ix_exhausted ix1 = false → conn_ix_exhausted ix2 = false →
+  conn_channel ix1 = conn_channel ix2 → bv_unsigned ix1 = bv_unsigned ix2
+:= by
+  intro ix1 ix2 H1 H2 Heq
+  exact conn_channel_injective ix1 ix2 (conn_ix_not_exhausted_lt ix1 H1)
+    (conn_ix_not_exhausted_lt ix2 H2) Heq
+
+/-! [listening_socket_model] with the counter parked at the last index
+    the guard refuses to hand over at.  Written through [State.mkModelOf]
+    rather than reached, because reaching it is the 2^64 accepts nothing
+    can perform; every other field is the listening model's, so the ONLY
+    difference between this fixture and [listening_socket_model] is the
+    counter — which is what makes the two case groups below a comparison
+    of the guard and not of two unrelated states. -/
+def exhausted_listening_model : Model :=
+  Model.mkModelOf (m_fd listening_socket_model) (m_vm listening_socket_model)
+    (IoState.mkIoState (m_stdin listening_socket_model) (m_urandom listening_socket_model)
+               (m_net listening_socket_model)
+               (Z_to_bv 64 (two_pow_64 - 3)))
+    (m_fsys listening_socket_model) (m_proc listening_socket_model)
+    (m_lim listening_socket_model) (m_time listening_socket_model)
+
+/-! The same model ONE INDEX BELOW the guard: the last index at which a
+    connection is still handed over. -/
+def last_usable_listening_model : Model :=
+  Model.mkModelOf (m_fd listening_socket_model) (m_vm listening_socket_model)
+    (IoState.mkIoState (m_stdin listening_socket_model) (m_urandom listening_socket_model)
+               (m_net listening_socket_model)
+               (Z_to_bv 64 (two_pow_64 - 4)))
+    (m_fsys listening_socket_model) (m_proc listening_socket_model)
+    (m_lim listening_socket_model) (m_time listening_socket_model)
+
+/-! THE REJECTION.  At the wrap the model refuses the descriptor, and it
+    refuses it for EVERY value [State.alloc_fd]'s 4096-candidate scan
+    could name, not merely for the one this table's allocator would
+    return.  A kernel that answered any of them would be answering
+    truthfully — Linux has no such counter and would hand fd 4 over — so
+    this is the model NARROWING rather than reporting a kernel fault,
+    which is the direction the fail-closed rule asks for and the reason
+    the failure mode is a refusal to certify rather than a wrong channel.
+
+    Compare [accept_success_return_is_exactly_the_lowest_free_fd], which
+    is the same [filter] over the same 4096 candidates on the same fd
+    table and returns [[4]].  The two differ in the counter alone. -/
+def accept4_admits_at (m : Model) (r : word) : Bool :=
+  (match accept4_answering m r with
+  | check_result.CheckOk _ _ => true
+  | _ => false
+  )
+
+/-! The other verdict this group has to separate: DECLINING is not
+    rejecting, and the guard must produce the second and never the
+    first. -/
+def accept4_declines_at (m : Model) (r : word) : Bool :=
+  (match accept4_answering m r with
+  | check_result.CheckUnmodeled => true
+  | _ => false
+  )
+
+theorem accept_at_the_wrap_hands_over_no_descriptor_at_all :
+  ((List.range' 0 4096).map Int.ofNat).filter (fun n => accept4_admits_at exhausted_listening_model (Z_to_bv 64 n))
+  = []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+theorem accept_at_the_wrap_rejects_the_allocated_fd :
+  accept4_answering exhausted_listening_model 4 = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! NOT VACUOUS, and this is the case that proves it: one index lower the
+    very same [filter] over the very same candidates returns [[4]] again,
+    and the connection is handed over on channel [2^64 - 1] — the LAST
+    channel that is not a standard stream.  Without this pair the group
+    above would pass just as well against a fixture that had broken
+    [accept] outright. -/
+theorem accept_one_below_the_wrap_still_hands_over :
+  ((List.range' 0 4096).map Int.ofNat).filter (fun n => accept4_admits_at last_usable_listening_model (Z_to_bv 64 n))
+  = [4]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+theorem accept_one_below_the_wrap_uses_the_last_free_channel :
+  bv_unsigned (conn_channel (Z_to_bv 64 (two_pow_64 - 4)))
+  = (two_pow_64 - 1)
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE ARM STILL ANSWERS.  The guard empties the SUCCESS side of the
+    [alt] and nothing else, so all three injected errnos are still
+    admitted and each leaves the model exactly as it found it — the
+    queue not advanced, the counter not bumped.  That is why
+    [Checks.Progress.receptive] is untouched: [accept] has an outcome at
+    the wrap, and refusing to hand a connection over is not the same as
+    having nothing to say.
+
+    It is also why the spec spells the empty branch [choose (fun _ =>
+    False)] and not [unmodeled]: the sibling of this [alt] answers a
+    concrete errno at the very same (input, model), and
+    [check_syscall_err_iff] holds against a TOTAL checker, so an arm that
+    both answers and declines there is not statable. -/
+theorem accept_at_the_wrap_still_answers_its_errnos :
+  accept4_answering exhausted_listening_model (errno_ret ENOMEM)
+    = check_result.CheckOk exhausted_listening_model []
+  ∧ accept4_answering exhausted_listening_model (errno_ret EMFILE)
+    = check_result.CheckOk exhausted_listening_model []
+  ∧ accept4_answering exhausted_listening_model (errno_ret ENFILE)
+    = check_result.CheckOk exhausted_listening_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! And the errno SET is unchanged at the wrap: the guard must not widen
+    it.  Same enumeration over the whole 1..4095 error window that
+    [accept_errno_set_is_exactly_these_three] runs on the unexhausted
+    model, so a guard that had quietly turned the arm into "any errno"
+    breaks here. -/
+theorem accept_at_the_wrap_errno_set_is_still_exactly_these_three :
+  ((List.range' 1 4095).map Int.ofNat).filter (fun e => accept4_admits_at exhausted_listening_model (errno_ret e))
+  = [ENOMEM, ENFILE, EMFILE]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE ARM DOES NOT DECLINE.  A [CheckUnmodeled] at the wrap would be a
+    different bug from the one the guard prevents — the model leaving
+    the modeled surface at an accept it had been answering — and the
+    [choose] rather
+    than [unmodeled] is what rules it out.  Pinned over the whole 4096
+    descriptor scan and the whole error window at once. -/
+theorem accept_at_the_wrap_never_declines :
+  ((List.range' 0 4096).map Int.ofNat).filter (fun n => accept4_declines_at exhausted_listening_model (Z_to_bv 64 n))
+  = []
+  ∧ ((List.range' 1 4095).map Int.ofNat).filter (fun e => accept4_declines_at exhausted_listening_model (errno_ret e))
+     = []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/- -------------------------------------------------------------------------
+   Sockets: the wrong ANSWERS, pinned so they stay out
+
+   Everything below is a wrong answer a spec can easily give: a
+   modeled answer Linux does not give -- not a gap.  That is the worst
+   kind of defect here: [Equivalence.modeled] cannot see a wrong [Ok],
+   so a source calling one of these would be certified against an
+   outcome no kernel produces.  None of the three is reachable by a live
+   run, for the reason recorded next to each, and the
+   soundness/completeness proofs cannot catch a regression either --
+   they prove checker = spec, so a change that moves BOTH in step
+   still satisfies them.  Hence lemmas, in the hand-built style the
+   accept4 cases above use.
+   ------------------------------------------------------------------------- -/
+
+/-! [socket domain type protocol] answering [r].  Fds 0-3 are taken in
+    [listening_socket_model], so a SUCCESS would have to be fd 4 --
+    which none of these cases is. -/
+def socket_answering (dom ty pro r : word) : check_result :=
+  check_syscall (SyscallInput.mkInput 198 [dom, ty, pro, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect r [] []) listening_socket_model
+
+/-! SOCK_PACKET IS DECIDED ABOVE THE PROTOCOL RANGE, and this is the
+    case that says so.  net/socket.c [__sock_create] rewrites the family
+    to PF_PACKET for [PF_INET, SOCK_PACKET] before [pf->create], so
+    [inet_create]'s [IPPROTO_MAX] test -- the only place that range
+    exists in the kernel -- never runs, and
+    net/packet/af_packet.c [packet_create] casts the protocol straight
+    to a [__be16] ethertype without checking it at all.  Answering
+    -EINVAL for [socket(AF_INET, SOCK_PACKET, -1)] would therefore be a
+    modeled answer Linux never gives: it gives -EPERM without
+    CAP_NET_RAW, and success with it.
+    No live run can pin this: the privileged answer depends on the
+    CAPABILITY of whoever runs the program, which is not part of any
+    claim this repository makes. -/
+/-- The proof is `close_check socket_answering` (route B of the
+    head-of-file note) plus the `Bool` constructor tests (route A).  The
+    four `CheckUnmodeled`s and the `CheckOk` on the DGRAM/RAW boundary are
+    all still pinned. -/
+theorem socket_packet_declines_at_every_protocol :
+  socket_answering 2 10 0 (errno_ret EINVAL) = check_result.CheckUnmodeled
+  ∧ socket_answering 2 10 4294967295 (errno_ret EINVAL) = check_result.CheckUnmodeled
+  ∧ socket_answering 2 10 263 (errno_ret EINVAL) = check_result.CheckUnmodeled
+  ∧ socket_answering 2 10 4294967295 (errno_ret EPERM) = check_result.CheckUnmodeled
+  /- AND SOCK_DGRAM AT THE SAME PROTOCOL, STILL ANSWERING.  The four above
+     are all [CheckUnmodeled], so on their own they stay green under any
+     change that declines MORE -- the DGRAM/RAW arm moving above the protocol
+     range with SOCK_PACKET, which is exactly the over-wide fix the lemma
+     below this one guards against.  Holding the protocol fixed and moving
+     only the TYPE across the boundary is what makes that failure land HERE,
+     in the lemma that names the boundary. -/
+  ∧ socket_answering 2 2 4294967295 (errno_ret EINVAL)
+     = check_result.CheckOk listening_socket_model []
+:= by (repeat' apply And.intro) <;> (try unfold socket_answering) <;> close_check
+
+theorem socket_dgram_and_raw_still_take_the_protocol_range :
+  socket_answering 2 2 4294967295 (errno_ret EINVAL)
+    = check_result.CheckOk listening_socket_model []
+  ∧ socket_answering 2 3 263 (errno_ret EINVAL)
+    = check_result.CheckOk listening_socket_model []
+  ∧ socket_answering 2 2 0 (errno_ret EINVAL) = check_result.CheckUnmodeled
+:= by (repeat' apply And.intro) <;> (try unfold socket_answering) <;> close_check
+
+theorem socket_kernel_build_answers_are_declined :
+  socket_answering 2 1 132 (errno_ret EPROTONOSUPPORT) = check_result.CheckUnmodeled
+  ∧ socket_answering 2 1 262 (errno_ret EPROTONOSUPPORT) = check_result.CheckUnmodeled
+  ∧ socket_answering 2 5 0 (errno_ret ESOCKTNOSUPPORT) = check_result.CheckUnmodeled
+  ∧ socket_answering 2 6 0 (errno_ret ESOCKTNOSUPPORT) = check_result.CheckUnmodeled
+  /- AND THE PURE ARGUMENT ERRORS, STILL ANSWERED, one per errno.  The four
+     above are all [CheckUnmodeled] and describe where the build-dependent
+     set ENDS; they do not fail when someone moves that end.  A change that
+     declined every unregistered protocol, or every type without an [inetsw]
+     list, leaves all four green and turns these two red -- which is the
+     whole reason they are in this lemma rather than only in the one below
+     it. -/
+  ∧ socket_answering 2 1 17 (errno_ret EPROTONOSUPPORT)
+     = check_result.CheckOk listening_socket_model []
+  ∧ socket_answering 2 4 0 (errno_ret ESOCKTNOSUPPORT)
+     = check_result.CheckOk listening_socket_model []
+:= by (repeat' apply And.intro) <;> (try unfold socket_answering) <;> close_check
+
+theorem socket_still_answers_its_pure_argument_errors :
+  socket_answering 2 1 17 (errno_ret EPROTONOSUPPORT)
+    = check_result.CheckOk listening_socket_model []
+  ∧ socket_answering 2 4 0 (errno_ret ESOCKTNOSUPPORT)
+    = check_result.CheckOk listening_socket_model []
+  ∧ socket_answering 2 0 0 (errno_ret ESOCKTNOSUPPORT)
+    = check_result.CheckOk listening_socket_model []
+:= by (repeat' apply And.intro) <;> (try unfold socket_answering) <;> close_check
+
+def reset_socket_model : Model :=
+  with_accepted
+    [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+      (3, FdSocket (SkReset (mkPeer (Z_to_bv 32 0) (Z_to_bv 16 0)) 3)) ]
+    listening_socket_model
+
+def fresh_socket_model : Model :=
+  with_creds demo_creds
+    (mkModel
+       [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+         (3, FdSocket SkFresh) ]
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+
+/-! Sixteen readable bytes at 4096 holding [struct sockaddr_in] for
+    AF_INET, port 0, INADDR_ANY -- the one address [bind_spec] accepts.
+    [sa_family_t] is host order, so AF_INET (2) is the single nonzero
+    byte; port and address are network order and both zero. -/
+def sockaddr_in_any_mem : word → Option byte :=
+  fun a =>
+    if andb (zleb 4096 (bv_unsigned a)) (zltb (bv_unsigned a) 4112)
+    then some (if bv_eqb a 4096 then Z_to_bv 8 2 else Z_to_bv 8 0)
+    else none
+
+/-! [bind(3, addrp, addrlen)] answering [r] with the copy-in ledger
+    [cis].  The address and the length are arguments because the two
+    sides of the copy have to be reachable from one place: the ledger is
+    what tells them apart, and an example that only ever supplies 16
+    readable bytes could never show that.  [mkEffectU] rather than
+    [mkEffect] for the same reason -- [mkEffect] hardcodes an EMPTY
+    ledger. -/
+def bind_answering_at (m : Model) (addrp addrlen r : word)
+    (cis : List (word × Nat)) : check_result :=
+  check_syscall (SyscallInput.mkInput 200 [3, addrp, addrlen, 0, 0, 0]
+                   sockaddr_in_any_mem (fun _ => none))
+    (SyscallEffect.mkEffectU r [] [] [] [] cis) m
+
+/-! [bind(3, <that address>, 16)] answering [r].  Sixteen readable bytes
+    at 4096 are copied, so the admissible effect carries that range. -/
+def bind_answering (m : Model) (r : word) : check_result :=
+  bind_answering_at m 4096 16 r [(4096, 16)]
+
+/-! THIS INPUT REALLY REACHES THE SOCKET-STATE MATCH, which is what
+    stops the case below from passing vacuously.  On a FRESH socket the
+    very same call is answered -- so the [CheckUnmodeled] below is the
+    state arm declining, not the length, fault, family, address or port
+    check refusing the address on the way in. -/
+/-- The statement is an INEQUALITY of `check_result`s, which has
+    no `DecidableEq`, so it is route A's refutation: `isUnmodeledR` projects
+    the constructor, `by decide` computes the projection, and
+    `ne_checkUnmodeled_of_code` turns that into the `≠`.  The value the arm
+    answers with is never named, which is the point -- the lemma says the
+    decline does NOT come from this input. -/
+theorem bind_input_reaches_the_state_match :
+  bind_answering fresh_socket_model 0 ≠ check_result.CheckUnmodeled
+:= ne_checkUnmodeled_of_code _ (by decide)
+
+theorem bind_on_a_reset_connection_declines :
+  bind_answering reset_socket_model (errno_ret EINVAL) = check_result.CheckUnmodeled
+  ∧ bind_answering reset_socket_model 0 = check_result.CheckUnmodeled
+:= by (repeat' apply And.intro) <;> (try unfold bind_answering) <;> close_check
+
+theorem bind_copyin_ledger_marks_the_copy :
+  /- PAST the copy: the ledger is required.  A fresh socket at 16 bytes
+     reaches the state match, and 8 bytes reaches [inet_bind_sk]'s -EINVAL --
+     both after [move_addr_to_kernel] has copied. -/
+  bind_answering_at fresh_socket_model 4096 16 (errno_ret EADDRINUSE)
+    [(4096, 16)] = check_result.CheckOk fresh_socket_model []
+  ∧ bind_answering_at fresh_socket_model 4096 16 (errno_ret EADDRINUSE) []
+       = check_result.CheckReject
+  ∧ bind_answering_at fresh_socket_model 4096 8 (errno_ret EINVAL)
+       [(4096, 8)] = check_result.CheckOk fresh_socket_model []
+  ∧ bind_answering_at fresh_socket_model 4096 8 (errno_ret EINVAL) []
+       = check_result.CheckReject
+  /- BEFORE the copy: the ledger is forbidden.  [addrlen == 0] copies
+     nothing and returns 0 from [move_addr_to_kernel]; [addrlen > 128] is
+     refused by its range test; and an unreadable address is the copy itself
+     failing, which transfers nothing. -/
+  ∧ bind_answering_at fresh_socket_model 4096 0 (errno_ret EINVAL) []
+       = check_result.CheckOk fresh_socket_model []
+  ∧ bind_answering_at fresh_socket_model 4096 0 (errno_ret EINVAL)
+       [(4096, 0)] = check_result.CheckReject
+  ∧ bind_answering_at fresh_socket_model 4096 129 (errno_ret EINVAL) []
+       = check_result.CheckOk fresh_socket_model []
+  ∧ bind_answering_at fresh_socket_model 4096 129 (errno_ret EINVAL)
+       [(4096, 129)] = check_result.CheckReject
+  ∧ bind_answering_at fresh_socket_model 8192 16 (errno_ret EFAULT) []
+       = check_result.CheckOk fresh_socket_model []
+  ∧ bind_answering_at fresh_socket_model 8192 16 (errno_ret EFAULT)
+       [(8192, 16)] = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> (try unfold bind_answering_at) <;> close_check
+
+def getsockopt_answering (m : Model) (level optlenp r : word)
+    (cis : List (word × Nat)) : check_result :=
+  check_syscall (SyscallInput.mkInput 209 [3, level, 4, 4096, optlenp, 0]
+                   sockaddr_in_any_mem (fun _ => none))
+    (SyscallEffect.mkEffectU r [] [] [] [] cis) m
+
+/-! THE [optlen] READ HAPPENS BEFORE THE LEVEL DISPATCH AND AFTER THE FD,
+    and this is what makes that falsifiable.
+
+    [do_sock_getsockopt] (net/socket.c) runs [security_socket_getsockopt]
+    and then [copy_from_sockptr(&max_optlen, optlen, sizeof(int))] with
+    no level test in between, so every -EOPNOTSUPP has moved four bytes.
+    [__sys_getsockopt] resolves the descriptor before it calls that
+    function at all, so -EBADF has moved none.  The result of the copy is
+    discarded, which is exactly why no live run can see this: the errno
+    is the same whatever is at [optlen], and no kernel return says
+    whether [copy_from_user] ran.
+
+    STATED IN BOTH DIRECTIONS, for [bind_copyin_ledger_marks_the_copy]'s
+    reason.  Accepting-with-a-ledger alone is satisfied by a model that
+    ledgers unconditionally; refusing-a-ledger alone by one that never
+    ledgers.  Only the two together pin the boundary -- and the boundary
+    is the whole content of the rule, since the errno does not depend
+    on it.
+
+    It also pins the DECISION in [getsockopt_spec] that an unreadable
+    [optlen] records nothing.  Rows 3-6 are that decision; without them a
+    spec that recorded the range unconditionally would pass every proof,
+    because [getsockopt_optlen_read] is shared by the
+    spec, the checker and the witness and moves all three at once.
+
+    ROW 5-6 ARE THE NAMED RESIDUE, not an accident: a real
+    [copy_from_user] copies partially, so Linux touches the page under
+    4109 before faulting on 4112, while the model records nothing.  That
+    under-records by at most one page, which
+    [State.syscall_effect_accesses] can only under-CHARGE, never
+    over-charge.  If that residue is ever closed, these two rows are what
+    has to change, and they say so here rather than in a comment nothing
+    checks. -/
+theorem getsockopt_optlen_ledger_marks_the_read :
+  /- PAST the fd, on an unknown level: the four bytes are required. -/
+  getsockopt_answering fresh_socket_model 17 4096 (errno_ret EOPNOTSUPP)
+    [(4096, 4)] = check_result.CheckOk fresh_socket_model []
+  ∧ getsockopt_answering fresh_socket_model 17 4096 (errno_ret EOPNOTSUPP)
+       [] = check_result.CheckReject
+  /- An UNREADABLE [optlen] is the copy failing, which transfers nothing
+     -- and the errno is unchanged, because its result is discarded. -/
+  ∧ getsockopt_answering fresh_socket_model 17 8192 (errno_ret EOPNOTSUPP)
+       [] = check_result.CheckOk fresh_socket_model []
+  ∧ getsockopt_answering fresh_socket_model 17 8192 (errno_ret EOPNOTSUPP)
+       [(8192, 4)] = check_result.CheckReject
+  /- A range straddling the mapped boundary is unreadable AS A WHOLE. -/
+  ∧ getsockopt_answering fresh_socket_model 17 4109 (errno_ret EOPNOTSUPP)
+       [] = check_result.CheckOk fresh_socket_model []
+  ∧ getsockopt_answering fresh_socket_model 17 4109 (errno_ret EOPNOTSUPP)
+       [(4109, 4)] = check_result.CheckReject
+  /- BEFORE the fd verdict: -EBADF never reached [do_sock_getsockopt],
+     so a ledger there is a read the kernel did not perform.  fd 9 is not
+     open in this model; the arguments are otherwise a good getsockopt. -/
+  ∧ check_syscall (SyscallInput.mkInput 209 [9, 17, 4, 4096, 4096, 0]
+                     sockaddr_in_any_mem (fun _ => none))
+       (SyscallEffect.mkEffectU (errno_ret EBADF) [] [] [] [] []) fresh_socket_model
+     = check_result.CheckOk fresh_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 209 [9, 17, 4, 4096, 4096, 0]
+                     sockaddr_in_any_mem (fun _ => none))
+       (SyscallEffect.mkEffectU (errno_ret EBADF) [] [] [] [] [(4096, 4)])
+       fresh_socket_model
+     = check_result.CheckReject
+  /- A KNOWN level is the option table, declined whatever the ledger --
+     so neither row above is the level test in disguise. -/
+  ∧ getsockopt_answering fresh_socket_model 6 4096 (errno_ret EOPNOTSUPP)
+       [(4096, 4)] = check_result.CheckUnmodeled
+  ∧ getsockopt_answering fresh_socket_model 6 4096 (errno_ret EOPNOTSUPP)
+       [] = check_result.CheckUnmodeled
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/- -------------------------------------------------------------------------
+   READ ON A CONNECTED SOCKET.  Everything below is invisible to the
+   proofs, which is why it is written out here.
+
+   Invisible: soundness and completeness prove CHECKER = SPEC, so they
+   hold just as well when the two regress TOGETHER.  Swapping
+   -ECONNRESET for -ETIMEDOUT, dropping the [set_fds] that retires the
+   connection to [SkReset] — making the error sticky rather than
+   one-shot — or loosening the [choose] bound on a delivered [NCons]
+   would leave every proof green.  These cases are what fails.
+   ------------------------------------------------------------------------- -/
+
+/-! A writable 16-byte landing zone at 4096 for the read's destination.
+    It has to be WRITABLE: with an unmapped buffer [Specs.read_spec]'s
+    queued-bytes arm answers -EFAULT ahead of the protocol, and a case
+    pinned there would be pinning the destination, not the socket. -/
+def sock_read_buf : word → Option byte :=
+  fun a => if bv_leu 4096 a && bv_ltu a 4112 then some 0 else none
+
+/-! The peer every connected model here talks to. -/
+def demo_peer : PeerAddr := mkPeer (Z_to_bv 32 0) (Z_to_bv 16 0)
+
+/-! A model whose fd 4 is a CONNECTED socket running script [rx], with
+    fd 3 still LISTENING behind it — exactly the shape an accept
+    leaves, which is why it is [accepted_socket_model] generalised over
+    the script rather than a table invented for these cases:
+    [connected_socket_model NFin] IS that model.
+
+    THE DESCRIPTOR AND THE CHANNEL ARE DELIBERATELY DIFFERENT — fd 4,
+    channel 3 = [Specs.conn_channel 0].  A model that put the
+    connection on fd 3 would make the two coincide, and then the
+    delivered-byte case below could not tell an event emitted on the
+    CONNECTION's channel from one emitted on the DESCRIPTOR: both would
+    read [ReadEv 3].  Since the whole point of [Specs.conn_channel] is
+    that it is NOT the fd — [State.lowest_fd] reissues a closed
+    descriptor, so after a [close] an accepted socket would otherwise
+    report on another stream's channel — a case that cannot separate
+    them does not pin the property it is named for. -/
+def connected_socket_model (rx : NetStream) : Model :=
+  with_accepted
+    [ (4, FdSocket (SkConnected demo_peer 3 rx)),
+      (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+      (3, FdSocket SkListening) ]
+    listening_socket_model
+
+/-! The state a socket read LEAVES BEHIND when it touches the fd table.
+    [State.fd_insert] reseats the descriptor at the HEAD; fd 4 already
+    leads here, so the order is unchanged and only the entry differs. -/
+def retired_socket_model (e : FdEntry) : Model :=
+  with_accepted
+    [ (4, e), (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+      (3, FdSocket SkListening) ]
+    listening_socket_model
+
+/-! [read(4, 4096, 16)] answering [r] with write ledger [ws]. -/
+def read_answering (m : Model) (r : word)
+    (ws : List (word × List byte)) : check_result :=
+  check_syscall (SyscallInput.mkInput 63 [4, 4096, 16, 0, 0, 0] (fun _ => none) sock_read_buf)
+    (mkEffect r ws []) m
+
+/-! THE PEER'S RST, DELIVERED ONCE.  -ECONNRESET is the answer and the
+    connection retires to [SkReset] in the SAME step, because
+    [sock_error] consumes the pending error with an [xchg] and
+    [tcp_done] sets [sk_shutdown = SHUTDOWN_MASK].  The second conjunct
+    catches a swap of the two protocol errnos; the third catches an arm
+    that answered the error without retiring the connection. -/
+theorem read_on_rst_delivers_econnreset_and_retires :
+  read_answering (connected_socket_model NRst) (errno_ret ECONNRESET) []
+    = check_result.CheckOk (retired_socket_model (FdSocket (SkReset demo_peer 3))) []
+  ∧ read_answering (connected_socket_model NRst) (errno_ret ETIMEDOUT) []
+    = check_result.CheckReject
+  ∧ read_answering (connected_socket_model NRst) (Z_to_bv 64 0) []
+    = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE CONNECTION THAT TIMED OUT, the same shape on the same
+    transition.  Pinning both is what makes the pair a SWAP test: each
+    case refuses the other's errno. -/
+theorem read_on_timeout_delivers_etimedout_and_retires :
+  read_answering (connected_socket_model NTimedOut) (errno_ret ETIMEDOUT) []
+    = check_result.CheckOk (retired_socket_model (FdSocket (SkReset demo_peer 3))) []
+  ∧ read_answering (connected_socket_model NTimedOut) (errno_ret ECONNRESET) []
+    = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE ERROR IS ONE-SHOT, NOT STICKY.  A retired connection reads as
+    end-of-stream, and re-answering either protocol error is refused.
+    This is the case that fails if the [set_fds] above is dropped: with
+    the connection left in [SkConnected _ _ NRst] the error would repeat
+    forever, which is a plausible answer Linux does not give. -/
+theorem read_on_a_retired_connection_is_end_of_stream :
+  read_answering (retired_socket_model (FdSocket (SkReset demo_peer 3)))
+      (Z_to_bv 64 0) []
+    = check_result.CheckOk (retired_socket_model (FdSocket (SkReset demo_peer 3))) []
+  ∧ read_answering (retired_socket_model (FdSocket (SkReset demo_peer 3)))
+       (errno_ret ECONNRESET) []
+    = check_result.CheckReject
+  ∧ read_answering (retired_socket_model (FdSocket (SkReset demo_peer 3)))
+       (errno_ret ETIMEDOUT) []
+    = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE PEER'S FIN reads 0 and leaves the socket alone — sticky, unlike
+    the two errors. -/
+theorem read_on_fin_is_end_of_stream_and_sticky :
+  read_answering (connected_socket_model NFin) (Z_to_bv 64 0) []
+    = check_result.CheckOk (connected_socket_model NFin) []
+  ∧ read_answering (connected_socket_model NFin) (Z_to_bv 64 1)
+       [(4096, [Z_to_bv 8 65])]
+    = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! A DELIVERED BYTE: the return, the write ledger, the event on the
+    CONNECTION's channel, and the advanced script, all in one equality.
+    THE EVENT IS [ReadEv 3] WHILE THE DESCRIPTOR READ IS 4 — that gap is
+    the point of the case, and it is what a model with the connection on
+    fd 3 could not state.
+
+    The second conjunct is the [choose] bound: the script holds ONE
+    byte, so a two-byte delivery is refused however well-formed its
+    ledger looks.  A spec that dropped the [net_take] agreement
+    conjunct would admit it. -/
+theorem read_on_a_byte_delivers_it_and_advances :
+  read_answering (connected_socket_model (NCons (Z_to_bv 8 65) NFin))
+      (Z_to_bv 64 1) [(4096, [Z_to_bv 8 65])]
+    = check_result.CheckOk (retired_socket_model
+                 (FdSocket (SkConnected demo_peer 3 NFin)))
+        [event.ReadEv 3 (Z_to_bv 8 65)]
+  ∧ read_answering (connected_socket_model (NCons (Z_to_bv 8 65) NFin))
+       (Z_to_bv 64 2) [(4096, [Z_to_bv 8 65, Z_to_bv 8 66])]
+    = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE SAME DELIVERY AT A COUNT OVER THE WRITE SIDE'S CEILING.
+    [read]'s socket arm does not carry [Uaccess.modeled_rw_count], the
+    128 KiB ceiling of the write side, because it does not need it:
+    [State.net_take_z] walks the script in [positive] and the delivery
+    is bounded by the script, not by the count.  It carries
+    [Uaccess.modeled_rw_range], so a count over the ceiling at an
+    addressable buffer is JUDGED and only an out-of-range one
+    declines.
+
+    [read_answering] fixes the count at 16, so this states the call
+    itself.  The buffer is [sock_read_buf]'s sixteen writable bytes and
+    the script holds one byte, which is why the answer is the same
+    one-byte delivery as above: the count is not what bounds it.
+
+    The second conjunct is the same [choose] bound as above, still
+    binding at this count — a zero-byte answer to a nonzero request is
+    refused, so the first conjunct is not merely one admissible outcome
+    among any number of them. -/
+theorem read_over_rw_bytes_max_is_judged :
+  check_syscall
+    (SyscallInput.mkInput 63 [4, 4096, Z_to_bv 64 (rw_bytes_max + 1), 0, 0, 0]
+       (fun _ => none) sock_read_buf)
+    (mkEffect (Z_to_bv 64 1) [(4096, [Z_to_bv 8 65])] [])
+    (connected_socket_model (NCons (Z_to_bv 8 65) NFin))
+  = check_result.CheckOk (retired_socket_model (FdSocket (SkConnected demo_peer 3 NFin)))
+      [event.ReadEv 3 (Z_to_bv 8 65)]
+  ∧ check_syscall
+       (SyscallInput.mkInput 63 [4, 4096, Z_to_bv 64 (rw_bytes_max + 1), 0, 0, 0]
+          (fun _ => none) sock_read_buf)
+       (mkEffect (Z_to_bv 64 0) [] [])
+       (connected_socket_model (NCons (Z_to_bv 8 65) NFin))
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/- =========================================================================
+   connect (203) — the arms, the two orderings, and the ledger boundary
+   ========================================================================= -/
+
+/-! WHY THESE ARE WRITTEN OUT BY HAND.  Two of connect's states cannot
+    be built by a binary on its own: [SkConnected] and [SkReset] need a
+    successful [accept], which needs an inbound connection.  The cases
+    below state connect's arms and the ledger boundary.
+
+    Sixteen readable bytes at 8192 holding [struct sockaddr_in] for
+    AF_INET, port 80, 127.0.0.1 — a well-formed address, so what stops
+    the call is always the fd or the state and never the address. -/
+def connect_addr_mem : word → Option byte :=
+  fun a => if      bv_eqb a 8192 then some 2      /- sin_family lo: AF_INET -/
+           else if bv_eqb a 8193 then some 0      /- sin_family hi -/
+           else if bv_eqb a 8194 then some 0      /- sin_port hi -/
+           else if bv_eqb a 8195 then some 80     /- sin_port lo -/
+           else if bv_eqb a 8196 then some 127    /- sin_addr -/
+           else if bv_eqb a 8197 then some 0
+           else if bv_eqb a 8198 then some 0
+           else if bv_eqb a 8199 then some 1
+           else if andb (zltb 8199 (bv_unsigned a))
+                        (zltb (bv_unsigned a) 8208)
+           then some 0                            /- sin_zero -/
+           else none
+
+/-! The same 16 bytes with [sin_family] set to AF_UNIX (1), which is
+    what makes the -EAFNOSUPPORT case below different from a truncation. -/
+def connect_unix_family_mem : word → Option byte :=
+  fun a => if bv_eqb a 8192 then some 1 else connect_addr_mem a
+
+/-! [sin_family] AF_UNSPEC (0), the disconnect request. -/
+def connect_unspec_mem : word → Option byte :=
+  fun a => if bv_eqb a 8192 then some 0 else connect_addr_mem a
+
+/-! connect(fd, addrp, addrlen) — syscall 203 — against model [m],
+    answering [r], with [mp] as the readable memory, claiming NO
+    copy-from-user range.  Use this for the arms ABOVE the copy. -/
+def connect_answering (mp : word → Option byte)
+    (m : Model) (fd addrp addrlen r : word) : check_result :=
+  check_syscall (SyscallInput.mkInput 203 [fd, addrp, addrlen, 0, 0, 0] mp (fun _ => none))
+    (mkEffect r [] []) m
+
+/-! The same call claiming a copy-from-user range of [n] bytes at
+    [addrp].  Use this for the arms BELOW the copy — which, because
+    [__sys_connect] copies before [__sys_connect_file] resolves the
+    socket, includes -ENOTSOCK.  Splitting the two spellings is what
+    makes the ledger boundary visible in each example rather than
+    hidden in a shared helper: an example that uses the wrong one is
+    [CheckReject], and that is the point. -/
+def connect_answering_c (mp : word → Option byte)
+    (m : Model) (fd addrp addrlen : word) (n : Nat) (r : word)
+    : check_result :=
+  check_syscall (SyscallInput.mkInput 203 [fd, addrp, addrlen, 0, 0, 0] mp (fun _ => none))
+    (with_copyins [(addrp, n)] (mkEffect r [] [])) m
+
+/-! A socket bound to INADDR_ANY:0 and NOT listened on. -/
+def bound_socket_model : Model :=
+  with_creds demo_creds
+    (mkModel
+       [ (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+         (3, FdSocket SkBound) ]
+       (mkVmMaps [] [] 0 0 demo_limit) IEof [] none none none)
+
+/-! -EISCONN ON A LISTENING SOCKET, which is the answer worth a case of
+    its own: [listen] leaves [sock->state] at SS_UNCONNECTED and moves
+    only [sk->sk_state], so [__inet_stream_connect]'s SS_UNCONNECTED arm
+    returns the -EISCONN it pre-loaded rather than falling through.
+    -EINVAL is the plausible guess and it is REFUSED here, which is what
+    makes this case discriminate. -/
+theorem connect_on_a_listening_socket_is_eisconn :
+  connect_answering_c connect_addr_mem listening_socket_model 3 8192 16 16
+    (errno_ret EISCONN) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering_c connect_addr_mem listening_socket_model 3 8192 16 16
+       (errno_ret EINVAL) = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_eisconn_must_carry_its_copy :
+  connect_answering connect_addr_mem listening_socket_model 3 8192 16
+    (errno_ret EISCONN) = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering) <;> close_check
+
+theorem connect_on_an_accepted_socket_is_eisconn :
+  connect_answering_c connect_addr_mem accepted_socket_model 4 8192 16 16
+    (errno_ret EISCONN) = check_result.CheckOk accepted_socket_model []
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_on_a_reset_connection_is_eisconn :
+  connect_answering_c connect_addr_mem reset_socket_model 3 8192 16 16
+    (errno_ret EISCONN) = check_result.CheckOk reset_socket_model []
+  ∧ connect_answering_c connect_addr_mem reset_socket_model 3 8192 16 16
+       (errno_ret EINVAL) = check_result.CheckReject
+  ∧ connect_answering_c connect_addr_mem reset_socket_model 3 8192 16 16 0
+     = check_result.CheckReject
+  ∧ connect_answering_c connect_unspec_mem reset_socket_model 3 8192 2 2 0
+     = check_result.CheckUnmodeled
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_is_eisconn_whatever_the_peer_has_left_to_say :
+  connect_answering_c connect_addr_mem (connected_socket_model NFin) 4 8192 16 16
+    (errno_ret EISCONN) = check_result.CheckOk (connected_socket_model NFin) []
+  ∧ connect_answering_c connect_addr_mem (connected_socket_model NRst) 4 8192 16 16
+       (errno_ret EISCONN) = check_result.CheckOk (connected_socket_model NRst) []
+  ∧ connect_answering_c connect_addr_mem (connected_socket_model NTimedOut) 4 8192 16 16
+       (errno_ret EISCONN) = check_result.CheckOk (connected_socket_model NTimedOut) []
+  ∧ connect_answering_c connect_addr_mem
+       (connected_socket_model (NCons (Z_to_bv 8 65) NFin)) 4 8192 16 16
+       (errno_ret EISCONN)
+     = check_result.CheckOk (connected_socket_model (NCons (Z_to_bv 8 65) NFin)) []
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_faults_before_it_reaches_enotsock :
+  connect_answering (fun _ => none) listening_socket_model 1 8192 16
+    (errno_ret EFAULT) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering (fun _ => none) listening_socket_model 1 8192 16
+       (errno_ret ENOTSOCK) = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 200 [1, 8192, 16, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+      (mkEffect (errno_ret ENOTSOCK) [] []) listening_socket_model
+    = check_result.CheckOk listening_socket_model []
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering) <;> close_check
+
+theorem connect_on_a_channel_fd_is_enotsock :
+  connect_answering_c connect_addr_mem listening_socket_model 1 8192 16 16
+    (errno_ret ENOTSOCK) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering connect_addr_mem listening_socket_model 1 8192 16
+       (errno_ret ENOTSOCK) = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_on_a_closed_fd_is_ebadf :
+  connect_answering (fun _ => none) listening_socket_model 9 8192 16
+    (errno_ret EBADF) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering_c connect_addr_mem listening_socket_model 9 8192 16 16
+       (errno_ret EBADF) = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE THREE LENGTH THRESHOLDS, in the order the kernel applies them.
+    [move_addr_to_kernel] rejects > 128 and < 0; [__inet_stream_connect]
+    rejects < 2; [tcp_v4_connect] rejects < 16.  A length of 0 copies
+    nothing and cannot fault, so it lands on the 2-byte minimum rather
+    than on -EFAULT — checked with an address that is not readable at
+    all — and it records nothing. -/
+theorem connect_length_thresholds :
+  connect_answering connect_addr_mem listening_socket_model 3 8192 129
+    (errno_ret EINVAL) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering connect_addr_mem listening_socket_model 3 8192
+       (Z_to_bv 64 (2 ^ 32 - 1)) (errno_ret EINVAL)
+     = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering (fun _ => none) listening_socket_model 3 8192 0
+       (errno_ret EINVAL) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering connect_addr_mem listening_socket_model 3 8192 1
+       (errno_ret EFAULT) = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering) <;> close_check
+
+theorem connect_on_a_fresh_socket_reaches_tcp_v4_connect :
+  connect_answering_c connect_addr_mem fresh_socket_model 3 8192 4 4
+    (errno_ret EINVAL) = check_result.CheckOk fresh_socket_model []
+  ∧ connect_answering_c connect_unix_family_mem fresh_socket_model 3 8192 16 16
+       (errno_ret EAFNOSUPPORT) = check_result.CheckOk fresh_socket_model []
+  ∧ connect_answering_c connect_unix_family_mem fresh_socket_model 3 8192 16 16
+       (errno_ret EINVAL) = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_attempt_is_declined_not_refused :
+  connect_answering_c connect_addr_mem fresh_socket_model 3 8192 16 16 0
+    = check_result.CheckUnmodeled
+  ∧ connect_answering_c connect_addr_mem fresh_socket_model 3 8192 16 16
+       (errno_ret ECONNREFUSED) = check_result.CheckUnmodeled
+  ∧ connect_answering_c connect_addr_mem fresh_socket_model 3 8192 16 16
+       (errno_ret ETIMEDOUT) = check_result.CheckUnmodeled
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_af_unspec_is_a_disconnect :
+  connect_answering_c connect_unspec_mem fresh_socket_model 3 8192 2 2 0
+    = check_result.CheckOk fresh_socket_model []
+  ∧ connect_answering_c connect_unspec_mem listening_socket_model 3 8192 2 2 0
+     = check_result.CheckUnmodeled
+  ∧ connect_answering_c connect_unspec_mem accepted_socket_model 4 8192 2 2 0
+     = check_result.CheckUnmodeled
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_on_a_bound_socket_is_not_eisconn :
+  connect_answering_c connect_addr_mem bound_socket_model 3 8192 4 4
+    (errno_ret EINVAL) = check_result.CheckOk bound_socket_model []
+  ∧ connect_answering_c connect_addr_mem bound_socket_model 3 8192 4 4
+       (errno_ret EISCONN) = check_result.CheckReject
+  ∧ connect_answering_c connect_unix_family_mem bound_socket_model 3 8192 16 16
+       (errno_ret EAFNOSUPPORT) = check_result.CheckOk bound_socket_model []
+  ∧ connect_answering_c connect_addr_mem bound_socket_model 3 8192 16 16 0
+     = check_result.CheckUnmodeled
+  ∧ connect_answering_c connect_unspec_mem bound_socket_model 3 8192 2 2 0
+     = check_result.CheckUnmodeled
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering_c) <;> close_check
+
+theorem connect_af_unspec_precedes_the_state_switch :
+  connect_answering_c connect_unspec_mem listening_socket_model 3 8192 2 2
+    (errno_ret EISCONN) = check_result.CheckUnmodeled
+  ∧ connect_answering_c connect_addr_mem listening_socket_model 3 8192 2 2
+       (errno_ret EISCONN) = check_result.CheckOk listening_socket_model []
+  ∧ connect_answering_c connect_addr_mem fresh_socket_model 3 8192 2 2
+       (errno_ret EINVAL) = check_result.CheckOk fresh_socket_model []
+:= by (repeat' apply And.intro) <;> (try unfold connect_answering) <;> (try unfold connect_answering_c) <;> close_check
+
+def socket_call_model : Model :=
+  with_creds demo_creds
+    (mkModel
+       [ (0, FdChannel 0), (3, FdFile [102] 0), (4, FdFileW [103] 0),
+         (5, FdDir) ]
+       (mkVmMaps [] [] 0 0 demo_limit) IEof
+       [([102], [104, 105]), ([103], [])] none none none)
+
+/-! NO NON-SOCKET FD KIND IS A SOCKET, on all five calls.
+    [sock_from_file] tests the file's [f_op] for [socket_file_ops]
+    and nothing else, so a channel, a readable file, a writable file, an
+    append file, a READ-WRITE file, a directory and a pipe end all answer
+    -ENOTSOCK alike; the model says so in [Net.Socket.sock_fd]'s seven
+    non-socket arms.
+    (The fixture below exercises the first three and the directory; the
+    pipe end's is pinned in [Checks.Cases.Fs.Pipe], where the model that
+    can hold one lives.  The append fd's is pinned by neither, and does
+    not need to be: [Net.Socket.sock_fd]'s arms are one -ENOTSOCK per
+    kind with no state read, so the fixture is showing the SHAPE rather
+    than enumerating it.)
+    The second conjunct is
+    what makes this bind: were any of those arms ever to answer
+    something else -- -EBADF, say, as an unopened fd does -- the first
+    conjunct would stop holding, and were one to admit a SUCCESS the
+    third would. -/
+theorem socket_calls_decline_every_non_socket_fd_kind :
+  Forall (fun fd =>
+    Forall (fun no =>
+      check_syscall (SyscallInput.mkInput no [fd, 999, 999, 4096, 4, 0]
+                       (fun _ => none) (fun _ => none))
+        (mkEffect (errno_ret ENOTSOCK) [] []) socket_call_model
+      = check_result.CheckOk socket_call_model []
+      ∧ check_syscall (SyscallInput.mkInput no [fd, 999, 999, 4096, 4, 0]
+                         (fun _ => none) (fun _ => none))
+           (mkEffect (errno_ret EBADF) [] []) socket_call_model
+         = check_result.CheckReject
+      ∧ check_syscall (SyscallInput.mkInput no [fd, 999, 999, 4096, 4, 0]
+                         (fun _ => none) (fun _ => none))
+           (mkEffect (Z_to_bv 64 0) [] []) socket_call_model
+         = check_result.CheckReject)
+      [204, 205, 208, 209, 210])
+    [0, 3, 4, 5]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! Nothing past the descriptor changes the answer.  On 208 and 209 the
+    argument below is a LEVEL no protocol registers, with an optname to
+    match, and the level is what would decide: on a socket its test
+    fires first, so the set side's -ENOPROTOOPT comes from
+    [ip_setsockopt] and the get side's -EOPNOTSUPP from
+    [do_ip_getsockopt] (both net/ipv4/ip_sockglue.c), and the optname is
+    never reached.  On 204 and 205 that same register is [addr], and on
+    210 it is a [how] outside {0,1,2}.  Every one of them sits behind
+    the lookup, so none is admissible here.  Both the closed and the
+    live fd, both halves. -/
+theorem socket_calls_unknown_level_never_beats_the_fd :
+  Forall (fun no =>
+    check_syscall (SyscallInput.mkInput no [9, 999, 999, 4096, 4, 0]
+                     (fun _ => none) (fun _ => none))
+      (mkEffect (errno_ret EBADF) [] []) socket_call_model
+    = check_result.CheckOk socket_call_model []
+    ∧ check_syscall (SyscallInput.mkInput no [3, 999, 999, 4096, 4, 0]
+                       (fun _ => none) (fun _ => none))
+         (mkEffect (errno_ret ENOTSOCK) [] []) socket_call_model
+       = check_result.CheckOk socket_call_model []
+    ∧ check_syscall (SyscallInput.mkInput no [3, 999, 999, 4096, 4, 0]
+                       (fun _ => none) (fun _ => none))
+         (mkEffect (errno_ret ENOPROTOOPT) [] []) socket_call_model
+       = check_result.CheckReject)
+    [204, 205, 208, 209, 210]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! setsockopt's NEGATIVE optlen is -EINVAL, but the check lives in
+    [do_sock_setsockopt] (net/socket.c), which runs only once
+    the fd has resolved to a socket.  So a closed fd is
+    -EBADF and a live non-socket fd is -ENOTSOCK, and the -EINVAL a
+    reader of the man page would expect is inadmissible in both.  That
+    ordering is v6.7 and later: up to v6.6 the check sat in
+    [__sys_setsockopt] ahead of the lookup, and the first line below was
+    -EINVAL. -/
+theorem setsockopt_negative_optlen_never_beats_the_fd :
+  check_syscall (SyscallInput.mkInput 208 [9, 1, 2, 4096, Z_to_bv 64 (2 ^ 64 - 1), 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EBADF) [] []) socket_call_model
+  = check_result.CheckOk socket_call_model []
+  ∧ check_syscall (SyscallInput.mkInput 208 [3, 1, 2, 4096, Z_to_bv 64 (2 ^ 64 - 1), 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOTSOCK) [] []) socket_call_model
+     = check_result.CheckOk socket_call_model []
+  ∧ check_syscall (SyscallInput.mkInput 208 [3, 1, 2, 4096, Z_to_bv 64 (2 ^ 64 - 1), 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EINVAL) [] []) socket_call_model
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! A NULL address pointer and a NULL in/out length change nothing
+    either: [move_addr_to_user] (net/socket.c) reads the length, and
+    [sk_getsockopt] (net/core/sock.c) reads the option length, and both
+    run after the lookup.  So the -EFAULT they would earn on a socket is
+    inadmissible here. -/
+theorem socket_calls_null_pointers_never_beat_the_fd :
+  Forall (fun no =>
+    check_syscall (SyscallInput.mkInput no [3, 0, 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+      (mkEffect (errno_ret ENOTSOCK) [] []) socket_call_model
+    = check_result.CheckOk socket_call_model []
+    ∧ check_syscall (SyscallInput.mkInput no [3, 0, 0, 0, 0, 0]
+                       (fun _ => none) (fun _ => none))
+         (mkEffect (errno_ret EFAULT) [] []) socket_call_model
+       = check_result.CheckReject)
+    [204, 205, 209]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/- ..........................................................................
+   The five ON A SOCKET.  Every claim below is derived from kernel
+   source, and the version window for each is in `Sys.Net.Socket`
+   beside the arm it justifies.
+   .......................................................................... -/
+
+/-! One fd per [State.SockState] constructor, written out rather than
+    reached: fresh at 6, bound at 7, listening at 8, connected at 9,
+    reset at 10.  9 and 10 carry the SAME peer on purpose -- the two are
+    told apart by the STATE, never by the address. -/
+def socket_states_model : Model :=
+  with_creds demo_creds
+    (mkModel
+       [ (0, FdChannel 0), (3, FdFile [102] 0),
+         (6, FdSocket SkFresh), (7, FdSocket SkBound), (8, FdSocket SkListening),
+         (9, FdSocket (SkConnected (mkPeer (Z_to_bv 32 16909060) (Z_to_bv 16 443)) 3 NFin)),
+         (10, FdSocket (SkReset (mkPeer (Z_to_bv 32 16909060) (Z_to_bv 16 443)) 3)) ]
+       (mkVmMaps [] [] 0 0 demo_limit) IEof
+       [([102], [104, 105])] none none none)
+
+/-! GETPEERNAME IS THE ARM [SkReset] EXISTS FOR.  [inet_getname] with
+    [peer = 1] refuses on [!inet_dport] -- fresh, bound and listening --
+    OR on [sk_state] in [TCPF_CLOSE | TCPF_SYN_SENT], which is where
+    [tcp_done] left a socket the peer reset.  A CONSUMED FIN leaves
+    TCP_CLOSE_WAIT instead, which is in neither disjunct, so the
+    connected socket at fd 9 -- whose script is already [NFin] --
+    SUCCEEDS on a real kernel and is declined here rather than answered.
+    The two fds differ only in their constructor, and the model gives
+    them different answers: that is the claim. -/
+theorem getpeername_enotconn_covers_reset_but_not_close_wait :
+  Forall (fun fd =>
+    check_syscall (SyscallInput.mkInput 205 [fd, 4096, 4104, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+      (mkEffect (errno_ret ENOTCONN) [] []) socket_states_model
+    = check_result.CheckOk socket_states_model [])
+    [6, 7, 8, 10]
+  ∧ check_syscall (SyscallInput.mkInput 205 [9, 4096, 4104, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOTCONN) [] []) socket_states_model
+     = check_result.CheckUnmodeled
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! And the accepting half is not vacuous: on the RESET socket a claimed
+    success -- the 16 bytes [move_addr_to_user] would have reported -- is
+    inadmissible.  (On the connected socket no answer is inadmissible,
+    because the model declines there; a decline rejects nothing, which
+    is exactly why the decline must be the honest one.) -/
+theorem getpeername_success_on_a_reset_socket_is_rejected :
+  check_syscall (SyscallInput.mkInput 205 [10, 4096, 4104, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect 16 [] []) socket_states_model
+  = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! GETSOCKNAME DECLINES ON EVERY SOCKET STATE, including the fresh one
+    whose answer really is 0.0.0.0:0.  [inet_getname] with [peer = 0]
+    has no error return at all, so the only answer available is a
+    success that writes a [sockaddr_in] -- and past [SkFresh] it is an
+    ephemeral one [inet_csk_find_open_port] drew at random.  Stating
+    the decline as a lemma is what stops a later change from quietly
+    inventing an address. -/
+theorem getsockname_declines_on_every_socket_state :
+  Forall (fun fd =>
+    check_syscall (SyscallInput.mkInput 204 [fd, 4096, 4104, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+      (mkEffect 16 [] []) socket_states_model
+    = check_result.CheckUnmodeled)
+    [6, 7, 8, 9, 10]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! SETSOCKOPT AND GETSOCKOPT DISAGREE ON AN UNKNOWN LEVEL, and the
+    disagreement is real: the set side walks [ip_setsockopt], whose
+    first statement is [if (level != SOL_IP) return -ENOPROTOOPT;],
+    while the get side walks [do_ip_getsockopt], whose first statement is
+    [if (level != SOL_IP) return -EOPNOTSUPP;].  Two functions, one
+    file, two errnos.  Each rejects the other's, which is the half that
+    makes this non-vacuous -- inventing symmetry here is the obvious
+    mistake, and it is a rejected one. -/
+theorem unknown_level_is_enoprotoopt_setting_and_eopnotsupp_getting :
+  check_syscall (SyscallInput.mkInput 208 [6, 999, 2, 4096, 4, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret ENOPROTOOPT) [] []) socket_states_model
+  = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 208 [6, 999, 2, 4096, 4, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EOPNOTSUPP) [] []) socket_states_model
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 209 [6, 999, 2, 4096, 4104, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EOPNOTSUPP) [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 209 [6, 999, 2, 4096, 4104, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOPROTOOPT) [] []) socket_states_model
+     = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> close_check
+
+theorem negative_optlen_beats_the_unknown_level :
+  check_syscall (SyscallInput.mkInput 208 [6, 999, 2, 4096, Z_to_bv 64 (2 ^ 64 - 1), 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EINVAL) [] []) socket_states_model
+  = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 208 [6, 999, 2, 4096, Z_to_bv 64 (2 ^ 64 - 1), 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOPROTOOPT) [] []) socket_states_model
+     = check_result.CheckReject
+:= by (repeat' apply And.intro) <;> close_check
+
+theorem a_known_level_is_declined :
+  Forall (fun level =>
+    check_syscall (SyscallInput.mkInput 208 [6, level, 2, 4096, 4, 0]
+                     (fun _ => none) (fun _ => none))
+      (mkEffect 0 [] []) socket_states_model
+    = check_result.CheckUnmodeled
+    ∧ check_syscall (SyscallInput.mkInput 209 [6, level, 2, 4096, 4104, 0]
+                       (fun _ => none) (fun _ => none))
+        (mkEffect 0 [] []) socket_states_model
+      = check_result.CheckUnmodeled)
+    [0, 1, 6]
+  /- AND THE UNKNOWN LEVEL, STILL ANSWERED, on both calls.  Every conjunct
+     of the [Forall] is a decline, so the list on its own stays green if
+     [setsockopt] and [getsockopt] stop answering ANY level -- including the
+     [ip_setsockopt] / [do_ip_getsockopt] pair above, which is the one thing
+     these two calls do answer.  Level 999 is the same fd, the same option
+     and the same model state, one level outside the declined set. -/
+  ∧ check_syscall (SyscallInput.mkInput 208 [6, 999, 2, 4096, 4, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOPROTOOPT) [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 209 [6, 999, 2, 4096, 4104, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EOPNOTSUPP) [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+:= by
+  refine ⟨?_, ?_, ?_⟩
+  · exact Forall.cons ⟨by close_check, by close_check⟩
+      (Forall.cons ⟨by close_check, by close_check⟩
+        (Forall.cons ⟨by close_check, by close_check⟩ Forall.nil))
+  · close_check
+  · close_check
+
+theorem shutdown_rejects_a_bad_how_on_every_socket_state :
+  Forall (fun fd =>
+    Forall (fun how =>
+      check_syscall (SyscallInput.mkInput 210 [fd, how, 0, 0, 0, 0]
+                       (fun _ => none) (fun _ => none))
+        (mkEffect (errno_ret EINVAL) [] []) socket_states_model
+      = check_result.CheckOk socket_states_model [])
+      [3, 99, Z_to_bv 64 (2 ^ 64 - 1), Z_to_bv 64 (2 ^ 31 - 1)])
+    [6, 7, 8, 9, 10]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! SHUT_WR ON A LISTENING SOCKET IS 0 AND CHANGES NOTHING.  The
+    [case TCP_LISTEN:] arm is [if (!(how & RCV_SHUTDOWN)) break;], and
+    for SHUT_WR the incremented [how] is 2, so the [break] fires and the
+    [default:] arm -- the one that ORs the bits and calls
+    [sk_prot->shutdown] -- never runs.  The model state comes back
+    identical, which is the whole content of "changes nothing".  A
+    -ENOTCONN or an -EINVAL here is inadmissible. -/
+theorem shut_wr_on_a_listener_is_zero_and_a_no_op :
+  check_syscall (SyscallInput.mkInput 210 [8, 1, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect 0 [] []) socket_states_model
+  = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 210 [8, 1, 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret ENOTCONN) [] []) socket_states_model
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 210 [8, 1, 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EINVAL) [] []) socket_states_model
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! AND -ENOTCONN IS DECLINED, NOT ANSWERED, on the TCP_CLOSE states --
+    the most load-bearing decline in this file.  The errno is right:
+    [inet_shutdown]'s [case TCP_CLOSE:] sets [err = -ENOTCONN].  But it
+    then FALLS THROUGH into [default:] and ORs the bits into
+    [sk_shutdown] anyway, and net/ipv4/tcp.c [tcp_recvmsg_locked] tests
+    [sk_shutdown & RCV_SHUTDOWN] BEFORE its [TCP_CLOSE -> -ENOTCONN]
+    arm.  So after [shutdown(fresh, SHUT_RD)] a real [read] returns 0
+    where it would otherwise return -ENOTCONN.  [State.SockState] has
+    nowhere to put those bits, so answering the errno would buy a right
+    return at the price of a wrong successor state -- and the next read
+    would be confidently wrong.  Declining costs one fail-closed run;
+    answering costs a lie one syscall later. -/
+theorem shutdown_declines_where_it_would_have_to_drop_the_bits :
+  Forall (fun fd =>
+    Forall (fun how =>
+      check_syscall (SyscallInput.mkInput 210 [fd, how, 0, 0, 0, 0]
+                       (fun _ => none) (fun _ => none))
+        (mkEffect (errno_ret ENOTCONN) [] []) socket_states_model
+      = check_result.CheckUnmodeled)
+      [0, 1, 2])
+    [6, 7, 9, 10]
+  ∧ Forall (fun how =>
+       check_syscall (SyscallInput.mkInput 210 [8, how, 0, 0, 0, 0]
+                        (fun _ => none) (fun _ => none))
+         (mkEffect 0 [] []) socket_states_model
+       = check_result.CheckUnmodeled)
+       [0, 2]
+  /- AND THE TWO SHUTDOWN ANSWERS THAT SURVIVE, so the declines above
+     read as a boundary and not as [shutdown] having gone quiet.  Both
+     [Forall]s are uniformly [CheckUnmodeled], so on their own they stay
+     green under any change that declines MORE -- the bad-[how] gate
+     going unmodeled, or the TCP_LISTEN [break] arm going with it, which
+     is the change this lemma exists to notice.  The two pinned here are
+     the immediate neighbours of the declines: [how = 3] on a declining
+     fd, one step outside the mask, and [how = 1] on fd 8, one step
+     along from the [how] values the second [Forall] declines there. -/
+  ∧ check_syscall (SyscallInput.mkInput 210 [6, 3, 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EINVAL) [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 210 [8, 1, 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect 0 [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/- -------------------------------------------------------------------------
+   The SEND path: the accepting half
+
+   The cases here pin the whole of [Net.Socket.SendGoes] and
+   [Net.Socket.SendErr] -- the short-send prefix rule, the per-byte
+   [WriteEv] alphabet on the CONNECTION's channel, the once-only
+   -ECONNRESET and the SkConnected -> SkReset transition it leaves
+   behind.
+
+   The connected socket is [accepted_socket_model] above -- fd 4, the
+   head connection's peer, channel 3, script [NFin].  Reusing it rather
+   than writing a fresh fixture is deliberate: [NFin] is CLOSE_WAIT, the
+   state a model gets wrong by reading "peer closed" as "connection
+   closed", and [Net.Socket.send_state] maps it to [SendGoes].  So the
+   send examples run on a socket the accept examples PROVE is reachable.
+   ------------------------------------------------------------------------- -/
+
+/-! An 8-byte little-endian field at [base], as address/byte pairs, and
+    a memory view over such a list.  Written this way because a
+    [struct msghdr] is seven of them and [mem_ab]'s
+    one-[bv_eqb]-per-byte shape does not scale to 72 bytes. -/
+def u64_at (base v : Int) : List (Int × Int) :=
+  (List.range' 0 8).map (fun k => ((base + Int.ofNat k),
+                 (zshiftr v (8 * Int.ofNat k) % 256)))
+
+def mem_of (l : List (Int × Int)) : word → Option byte :=
+  fun a => (match l.find? (fun p => zeqb (Prod.fst p) (bv_unsigned a)) with
+           | some (_, v) => some (Z_to_bv 8 v)
+           | none => none
+           )
+
+/-! The two bytes both calls send, at 4096: "ab", exactly [mem_ab]'s. -/
+def send_payload : List (Int × Int) := [(4096, 97), (4097, 98)]
+
+/-! A [struct msghdr] at 8192 naming one iovec at 8320, which names the
+    payload.  The seven fields are at the offsets
+    [Net.Socket.sendmsg_spec] reads them from: name 0, namelen 8, iov 16,
+    iovlen 24, control 32, controllen 40, and FLAGS AT 48 -- whose value
+    is this definition's parameter precisely so a case can set it and
+    watch nothing happen. -/
+def send_msghdr_mem (struct_flags : Int) : word → Option byte :=
+  mem_of (u64_at 8192 0
+       ++ u64_at 8200 0
+       ++ u64_at 8208 8320
+       ++ u64_at 8216 1
+       ++ u64_at 8224 0
+       ++ u64_at 8232 0
+       ++ u64_at 8240 struct_flags
+       ++ u64_at 8320 4096
+       ++ u64_at 8328 2
+       ++ send_payload)
+
+/-! [sendto(4, "ab", 2, MSG_NOSIGNAL, NULL, 0)] answering [r] with the
+    copy-in ledger [cis].  The ledger is an argument for
+    [bind_answering_at]'s reason: it is what tells the arms that read
+    the payload apart from the arms that answer before it, and
+    [State.mkEffect] hardcodes an EMPTY one. -/
+def sendto_answering_with (m : Model) (r : word)
+    (cis : List (word × Nat)) : check_result :=
+  check_syscall (SyscallInput.mkInput 206 [4, 4096, 2, 16384, 0, 0] (mem_of send_payload)
+                   (fun _ => none)) (SyscallEffect.mkEffectU r [] [] [] [] cis) m
+
+/-! The errno form: a send that answers before it copies anything
+    carries an empty ledger. -/
+def sendto_answering (m : Model) (r : word) : check_result :=
+  sendto_answering_with m r []
+
+/-! THE SEND GOES OUT, ON THE CONNECTION'S OWN CHANNEL.  Channel 3, not
+    stdout's 1 -- [Net.Socket.conn_channel] starts at 3 because 0-2 are
+    stdio, and a send that emitted on the wrong channel would be
+    indistinguishable from a write to stdout in the trace.  One
+    [WriteEv] per byte, and the model is left ALONE: a send on a live
+    connection changes no descriptor.
+
+    THE LEDGER IS THE TWO BYTES IT ACTUALLY MOVED, and it is what makes
+    a dropped [record_copyins] visible: without it the admissible effect
+    would be the one carrying an EMPTY ledger, and the case below would
+    stop holding in both directions at once. -/
+theorem send_emits_on_the_connections_channel :
+  sendto_answering_with accepted_socket_model 2 [(4096, 2)]
+  = check_result.CheckOk accepted_socket_model [event.WriteEv 3 97, event.WriteEv 3 98]
+  ∧ sendto_answering accepted_socket_model 2 = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! A SHORT SEND IS REAL, and it is a prefix.  Every error path in
+    tcp_sendmsg_locked funnels through [do_error:], whose
+    [if (copied + copied_syn) goto out;] returns the count and discards
+    the error, so one byte of a two-byte send is an ordinary answer --
+    and its ledger is the ONE byte it read, not the two the call named.
+    What is NOT admissible: more than was readable-and-requested, and a
+    zero-byte answer to a nonzero request -- a send either moves a byte
+    or reports an errno, it never reports 0. -/
+theorem send_short_is_a_prefix_and_zero_is_not :
+  sendto_answering_with accepted_socket_model 1 [(4096, 1)]
+  = check_result.CheckOk accepted_socket_model [event.WriteEv 3 97]
+  ∧ sendto_answering_with accepted_socket_model 3 [(4096, 3)] = check_result.CheckReject
+  ∧ sendto_answering accepted_socket_model 0 = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! AN ERRNO-ENCODED RETURN THROUGH THE SEND ARM EVALUATES: -EINTR on a
+    live connection is rejected -- the only accepting shape on
+    [SendGoes] is a delivered prefix -- and closing it by [check_eq]
+    pins that [check_send_on_socket] converts [ret] to a unary [nat]
+    only under its range test, as [Fs.ReadWrite.check_write]'s channel
+    arm does; a flat chain that converted it first would not finish on
+    this statement. -/
+theorem send_errno_return_rejected :
+  sendto_answering accepted_socket_model (errno_ret EINTR) = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! MSG_NOSIGNAL IS THE FIRST GATE, ahead of the fd and ahead of the
+    buffer.  A flagless send is declined even though this fd, this
+    buffer and this count are all fine -- that is the deliberate
+    departure from the kernel's order, which consults the flag last.
+    MSG_NOSIGNAL|MSG_DONTWAIT is declined too: the word must be EXACTLY
+    MSG_NOSIGNAL, because every other MSG_* changes what the call means
+    and Linux ignores unknown bits rather than rejecting them, so a
+    permissive reading would be a confidently wrong answer. -/
+theorem send_flag_word_must_be_exactly_nosignal :
+  check_syscall (SyscallInput.mkInput 206 [4, 4096, 2, 0, 0, 0] (mem_of send_payload)
+                   (fun _ => none)) (SyscallEffect.mkEffectU 2 [] [] [] [] [(4096, 2)])
+    accepted_socket_model
+  = check_result.CheckUnmodeled
+  ∧ check_syscall (SyscallInput.mkInput 206 [4, 4096, 2, 16448, 0, 0] (mem_of send_payload)
+                     (fun _ => none)) (SyscallEffect.mkEffectU 2 [] [] [] [] [(4096, 2)])
+       accepted_socket_model
+     = check_result.CheckUnmodeled
+  /- AND THE EXACT WORD, STILL GOING OUT.  The two declines above are
+     both [CheckUnmodeled], so on their own they stay green if the gate
+     widens to refuse MSG_NOSIGNAL as well -- [sendto] going quiet
+     altogether, which is the one change this lemma exists to notice.
+     The same fd, buffer, count and ledger with flags = MSG_NOSIGNAL is
+     the point on the other side of the gate. -/
+  ∧ sendto_answering_with accepted_socket_model 2 [(4096, 2)]
+     = check_result.CheckOk accepted_socket_model [event.WriteEv 3 97, event.WriteEv 3 98]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! A model whose fd 4 carries a connection with a PENDING RESET, and
+    the model the first send after it must leave behind.  [SkReset]
+    records that the error has been consumed: [include/net/sock.h]'s
+    [sock_error] takes it with an [xchg], and it is taken by whichever
+    of read and send reaches it first -- which is why a send transitions
+    the socket exactly as a read does.  Both are [accepted_socket_model]
+    with fd 4 rewritten, so the queue and the handed-over count stay
+    what an accept really left. -/
+def reset_pending_socket_model : Model :=
+  with_fds
+    [ (4, FdSocket (SkConnected (mkPeer (Z_to_bv 32 0) (Z_to_bv 16 0)) 3 NRst)),
+      (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+      (3, FdSocket SkListening) ]
+    accepted_socket_model
+
+def reset_consumed_socket_model : Model :=
+  with_fds
+    [ (4, FdSocket (SkReset (mkPeer (Z_to_bv 32 0) (Z_to_bv 16 0)) 3)),
+      (0, FdChannel 0), (1, FdChannel 1), (2, FdChannel 2),
+      (3, FdSocket SkListening) ]
+    accepted_socket_model
+
+/-! THE TWO-STEP RESET, exactly as the code produces it.  The first send
+    after a peer RST is -ECONNRESET and REWRITES THE DESCRIPTOR; the
+    next is -EPIPE, because the error is gone.  Neither carries a
+    signal: [sk_stream_error]'s [sock_error] replaces the errno before
+    the flag is consulted, so only the second call is even a candidate,
+    and MSG_NOSIGNAL is set.  Both leave the ledger EMPTY: Linux answers
+    from the connection state without copying a byte of the buffer. -/
+theorem send_consumes_the_pending_reset_once :
+  sendto_answering reset_pending_socket_model (errno_ret ECONNRESET)
+  = check_result.CheckOk reset_consumed_socket_model []
+  ∧ sendto_answering reset_consumed_socket_model (errno_ret EPIPE)
+     = check_result.CheckOk reset_consumed_socket_model []
+  ∧ sendto_answering reset_pending_socket_model (errno_ret EPIPE)
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! [sendmsg(4, &msg, MSG_NOSIGNAL)] with the header at 8192 lands on
+    the same connection, the same channel and the same events as the
+    [sendto] above: one gather of one iovec is one send.
+
+    ITS LEDGER IS THREE RANGES, IN THE ORDER THE KERNEL READ THEM: the
+    56-byte header, the one 16-byte iovec descriptor, then the two
+    payload bytes.  That is the whole reason [sendto]'s ledger is one
+    range and this one is not -- the two calls read different things
+    before they reach the same send. -/
+theorem sendmsg_gathers_onto_the_same_channel :
+  check_syscall (SyscallInput.mkInput 211 [4, 8192, 16384, 0, 0, 0] (send_msghdr_mem 0)
+                   (fun _ => none))
+    (SyscallEffect.mkEffectU 2 [] [] [] []
+       [(8192, 56), (8320, 16), (4096, 2)]) accepted_socket_model
+  = check_result.CheckOk accepted_socket_model [event.WriteEv 3 97, event.WriteEv 3 98]
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE SINGLE EASIEST WAY TO GET THIS FEATURE WRONG, pinned in both
+    directions.  [msg_flags] at offset 48 is READ BY NOTHING:
+    [____sys_sendmsg] does
+    [flags |= (msg_sys->msg_flags & allowed_msghdr_flags);] with
+    [allowed_msghdr_flags] passed as 0 and then OVERWRITES the field
+    with the argument, so the struct's copy cannot contribute.
+
+    - argument MSG_NOSIGNAL, struct field 0: ACCEPTED, unchanged from
+      the case above -- the field being clear takes nothing away.
+    - argument 0, struct field MSG_NOSIGNAL: DECLINED.  This is the
+      case that matters.  A spec reading the field would conclude "the
+      flag is set, so no signal" and answer [CheckOk] for a call that
+      really does take SIGPIPE and kill the process -- a wrong MODELED
+      answer, which makes [strong_equiv] false rather than merely
+      unprovable, and the one direction [modeled] cannot see. -/
+theorem sendmsg_reads_the_argument_never_the_struct_field :
+  check_syscall (SyscallInput.mkInput 211 [4, 8192, 16384, 0, 0, 0]
+                   (send_msghdr_mem 0) (fun _ => none))
+    (SyscallEffect.mkEffectU 2 [] [] [] []
+       [(8192, 56), (8320, 16), (4096, 2)]) accepted_socket_model
+  = check_result.CheckOk accepted_socket_model [event.WriteEv 3 97, event.WriteEv 3 98]
+  ∧ check_syscall (SyscallInput.mkInput 211 [4, 8192, 0, 0, 0, 0]
+                     (send_msghdr_mem 16384) (fun _ => none))
+       (SyscallEffect.mkEffectU 2 [] [] [] []
+          [(8192, 56), (8320, 16), (4096, 2)]) accepted_socket_model
+     = check_result.CheckUnmodeled
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE FD IS RESOLVED BEFORE THE HEADER, THE OPPOSITE OF [sendto].
+    [__sys_sendmsg] resolves the fd and only then calls [___sys_sendmsg],
+    where [copy_msghdr_from_user] lives -- so an unreadable [msg] on a
+    CLOSED fd is -EBADF, while the analogous [sendto] with an unreadable
+    buffer on a closed fd is -EFAULT.  Two calls that look like each
+    other and are not, and the nesting is the claim: a refactor that
+    hoisted the header read out to share it with [sendto] would change
+    both answers and this case would stop compiling.  Both answers
+    precede any copy, so both ledgers are empty. -/
+theorem sendmsg_resolves_the_fd_before_the_header :
+  check_syscall (SyscallInput.mkInput 211 [9, 8192, 16384, 0, 0, 0] (fun _ => none)
+                   (fun _ => none)) (mkEffect (errno_ret EBADF) [] [])
+    accepted_socket_model
+  = check_result.CheckOk accepted_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 211 [1, 8192, 16384, 0, 0, 0] (send_msghdr_mem 0)
+                     (fun _ => none)) (mkEffect (errno_ret ENOTSOCK) [] [])
+       accepted_socket_model
+     = check_result.CheckOk accepted_socket_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE qemu DIVERGENCE ON THE SEND PATH.  An unmapped but
+    in-range buffer is a RANGE that [import_ubuf]'s [access_ok] passes,
+    so Linux resolves the fd and only then touches the buffer: on a
+    connected socket [tcp_sendmsg_locked]'s copy faults and the call is
+    -EFAULT with nothing recorded, and on a socket with no connection
+    [sk_stream_wait_connect] answers -EPIPE without copying a byte.
+    qemu's [do_sendto] locks the whole buffer first and answers -EFAULT
+    in both cases.  The model follows Linux: [State.access_okb] passes
+    the range, the fd resolves, and [send_bytes] faults on the empty
+    readable prefix — so on the connected socket the two agree for
+    different reasons, and -EPIPE is refused; the never-connected
+    socket is where they part.
+
+    THE ADDRESS is 46912512909312 = 0x2AAAABAAE000, unmapped here.  It
+    is in range (2^45 < [State.TASK_SIZE]), so the range verdict is the
+    kernel's, and the copy fault is what is left.  Descriptor 4
+    is the accepted connection in [accepted_socket_model].
+
+    THE THIRD CONJUNCT IS THE CONTROL: the same unmapped buffer on a
+    LISTENING socket is -EPIPE, ledger empty, so what separates the two
+    answers is the socket's state and not the buffer. -/
+theorem sendto_unmapped_buffer_in_range_faults_on_the_copy :
+  check_syscall (SyscallInput.mkInput 206 [4, 46912512909312, 1, 16384, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EFAULT) [] []) accepted_socket_model
+  = check_result.CheckOk accepted_socket_model []
+  ∧ check_syscall (SyscallInput.mkInput 206 [4, 46912512909312, 1, 16384, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EPIPE) [] []) accepted_socket_model
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 206 [3, 46912512909312, 1, 16384, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EPIPE) [] []) listening_socket_model
+     = check_result.CheckOk listening_socket_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/- ---------------- socketpair (199), recvfrom (207), recvmsg (212) ------
+
+   These cases check the order claims these arms make. -/
+
+/-! Everything writable, nothing readable: enough for a destination
+    verdict, and it leaves [in_mem] out of the picture. -/
+def wmem_open : word → Option byte := fun _ => some 0
+
+/-! An OPEN descriptor that is not a socket is -ENOTSOCK, never -EBADF,
+    on both — and neither call delivers a byte, so any write at all is
+    refused.  The MSG_CMSG_COMPAT bit is fail-closed: its value is
+    0x80000000 on a CONFIG_COMPAT kernel and 0 on one without, and
+    nothing a binary can observe says which it is running on. -/
+theorem recv_on_a_non_socket_descriptor :
+  check_syscall (SyscallInput.mkInput 207 [1, 4096, 8, 0, 0, 0] (fun _ => none) wmem_open)
+    (mkEffect (errno_ret ENOTSOCK) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 207 [1, 4096, 8, 0, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret ENOTSOCK) [(4096, [97])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 212 [1, 4096, 0, 0, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret ENOTSOCK) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 212 [1, 4096, Z_to_bv 64 (2 ^ 31), 0, 0, 0]
+                     (fun _ => none) wmem_open)
+       (mkEffect (errno_ret ENOTSOCK) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckUnmodeled
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE ARM THIS SECTION ARGUES ABOUT MOST, AND THE ONLY CASE THAT
+    REACHES IT.  Everything above runs on a channel or an absent
+    descriptor.  [sockfd_lookup_errno] answers [None] for an [FdSocket],
+    which [recv_fd_answer] turns into [unmodeled] -- a DECLINE, and not
+    the -ENOTSOCK every other open fd kind takes.
+
+    THE OFFERED EFFECT IS -ENOTSOCK ON PURPOSE.  Both halves demand
+    [CheckUnmodeled] while being handed exactly the answer the arm would
+    give if it were folded into the wildcard above it, so flipping
+    [Some (FdSocket _) => None] to [Some ENOTSOCK] turns both into
+    [CheckOk] and breaks this example.  Nothing else would notice: the
+    soundness and completeness lemmas in [Checks.ExecutableSpecs] are
+    biconditionals over [sockfd_lookup_errno]'s definition, so they hold
+    whichever answer it gives.
+
+    Both socket STATES are used, fresh at 6 and connected at 9, because
+    the decline is about the fd KIND and must not depend on the state: a
+    connected socket has bytes to deliver and is still declined at these
+    two entry points, which is what makes [read]/[readv] the modeled way
+    to read one. -/
+theorem recv_declines_a_socket_descriptor :
+  check_syscall (SyscallInput.mkInput 207 [6, 4096, 8, 0, 0, 0] (fun _ => none) wmem_open)
+    (mkEffect (errno_ret ENOTSOCK) [] []) socket_states_model
+  = check_result.CheckUnmodeled
+  ∧ check_syscall (SyscallInput.mkInput 212 [9, 4096, 0, 0, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret ENOTSOCK) [] []) socket_states_model
+     = check_result.CheckUnmodeled
+  /- AND THE OTHER FD KINDS, STILL ANSWERING -ENOTSOCK, on the same
+     model.  Both declines above are [CheckUnmodeled], so on their own
+     they stay green if [sockfd_lookup_errno] answers [None] for EVERY
+     open fd -- the wildcard collapsing the other way, which is as
+     plausible a wrong fix as the one the paragraph above rules out and
+     is invisible to the two conjuncts that only name sockets.  The
+     channel at fd 0 and the regular file at fd 3 are the boundary: not
+     a socket, so not declined. -/
+  ∧ check_syscall (SyscallInput.mkInput 207 [0, 4096, 8, 0, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret ENOTSOCK) [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+  ∧ check_syscall (SyscallInput.mkInput 212 [3, 4096, 0, 0, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret ENOTSOCK) [] []) socket_states_model
+     = check_result.CheckOk socket_states_model []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE ORDER, both ways.  The same closed descriptor and the same
+    unreachable pointer get -EFAULT from recvfrom, which imports the
+    user buffer before it resolves the descriptor, and -EBADF from
+    recvmsg, which resolves the descriptor before it reads the message
+    header.  Each answer is refused where the other belongs. -/
+theorem recv_argument_order_is_opposite :
+  check_syscall (SyscallInput.mkInput 207 [999, Z_to_bv 64 (2 ^ 63), 1, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EFAULT) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 207 [999, Z_to_bv 64 (2 ^ 63), 1, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EBADF) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 212 [999, Z_to_bv 64 (2 ^ 63), 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EBADF) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 212 [999, Z_to_bv 64 (2 ^ 63), 0, 0, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EFAULT) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE TRAP.  socketpair(AF_INET, SOCK_STREAM, 0, sv) fails with
+    -EOPNOTSUPP and has ALREADY written the two reserved descriptor
+    numbers into sv — 3 and 4 here, the two lowest free ones past
+    stdin/stdout/stderr.  The three refusals say the write is doing
+    work: a target that skipped it, wrote different numbers, or turned
+    the failure into a success is refused. -/
+theorem socketpair_writes_the_descriptors_before_it_fails :
+  check_syscall (SyscallInput.mkInput 199 [2, 1, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+    (mkEffect (errno_ret EOPNOTSUPP) [(4096, [3,0,0,0]), (4100, [4,0,0,0])] [])
+    (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EOPNOTSUPP) [] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EOPNOTSUPP) [(4096, [4,0,0,0]), (4100, [5,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect 0 [(4096, [3,0,0,0]), (4100, [4,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The flag-bit check runs BEFORE the two descriptors are reserved, so
+    -EINVAL leaves sv alone — and it is answered for every family, not
+    just the modeled one.  AF_UNIX (family 1) really does hand back two
+    sockets connected to each other, a shape [State.SockState] cannot
+    express: fail closed. -/
+theorem socketpair_flag_check_precedes_the_writes :
+  check_syscall (SyscallInput.mkInput 199 [2, 257, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+    (mkEffect (errno_ret EINVAL) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 257, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EINVAL) [(4096, [3,0,0,0]), (4100, [4,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 199 [1, 257, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EINVAL) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [1, 1, 0, 4096, 0, 0] (fun _ => none) wmem_open)
+       (mkEffect 0 [(4096, [3,0,0,0]), (4100, [4,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckUnmodeled
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE DESTINATION VERDICT, AND THE GATE IT TURNS ON.  With [sv]
+    unwritable the spec cannot say the two numbers landed, so it asks
+    instead whether the FIRST [put_user]'s own 4-byte range is one
+    [access_ok] refuses.  Both sides of that question, because only the
+    pair pins the width:
+
+    - [sv = TASK_SIZE] is refused at the first store, so -EFAULT with
+      nothing written is the answer, and a target that wrote anything
+      there is refused;
+    - [sv = TASK_SIZE - 5] is NOT: the first store's own 4-byte range
+      ends at [TASK_SIZE - 1], inside the address space, while the
+      second's ends at [TASK_SIZE + 3], past it.  Linux answers -EFAULT
+      with [fd1] stored if that page is mapped and nothing stored if it
+      is not — a PARTIAL outcome the model does not express, so it
+      declines.
+
+    The second case is the one with teeth.  The gate reads
+    [access_okb sv 4]; written over 8 — the whole destination, which is
+    the obvious way to write it — it would fail here too and this example
+    would answer -EFAULT instead of declining.  So this is the check that
+    fails if the width is widened. -/
+theorem socketpair_declines_the_partial_destination :
+  check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 TASK_SIZE, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EFAULT) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 TASK_SIZE, 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EFAULT) [(Z_to_bv 64 TASK_SIZE, [3,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (TASK_SIZE - 5), 0, 0]
+                     (fun _ => none) (fun _ => none))
+       (mkEffect (errno_ret EFAULT) [] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckUnmodeled
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE DESTINATION THAT WALKS OFF THE TOP OF THE ADDRESS SPACE.  Three
+    groups, and the reason all of them are here is the THIRD of the
+    four listed at the top of [Checks.Examples]: they pin model-internal
+    state and a model constant.  The state is [in_wmem]; an Sv48
+    kernel maps nothing at or above 2^47, so every address a real run
+    can map is one [access_ok] accepts and the walk and the range test
+    never disagree there.  The constant is
+    [State.TASK_SIZE].  They disagree in the DEFINITION, which is
+    what matters: [Equivalence.strong_universal] quantifies over the
+    image freely and nothing constrains [sv] — [socketpair_flags_ok] and
+    [socketpair_modeled_b] read only [family], [type] and [protocol].
+
+    THE WITNESS GROUPS BELOW use a memory that maps EXACTLY its own
+    range and nothing else, which is what makes their walk Examples
+    tight.  The contrast is [wmem_open], which answers [Some] for any
+    address at all, so an Example over it could not tell a wrapping
+    destination from any other.  The LAST
+    group, [socketpair_dest_width_is_eight], runs over [wmem_open] on
+    purpose and says so in place: it measures the [TASK_SIZE] test, so the
+    mapping has to be settled for all three of its destinations at once
+    rather than being a second thing that varies. -/
+
+/-! The last four bytes of the address space, so the 8-byte walk covers
+    them and then the four at 0. -/
+def socketpair_wrap_sv : word := Z_to_bv 64 (2 ^ 64 - 4)
+
+def socketpair_wrap_mem : word → Option byte :=
+  fun a => if (decide (bv_unsigned a < 4) || decide (2 ^ 64 - 4 ≤ bv_unsigned a))
+           then some (Z_to_bv 8 0) else none
+
+/-! THE MUTATION TEST, MADE PERMANENT rather than performed once, in the
+    form [Checks.Cases.Uaccess.wrap_would_pass_without_the_conjunct]
+    takes.  This is what [socketpair_spec] would consult without its
+    [State.access_okb] conjunct: the walk, which WRAPS because
+    [State.read_bytes_map] advances in word arithmetic, and which reads
+    all eight bytes back off a memory that maps only those eight.  It
+    says "writable", and the spec would answer [socketpair_written] with
+    both descriptor numbers stored — where
+    Linux's first [put_user] is refused by [access_ok] and the call is
+    -EFAULT with nothing written.
+
+    Pinning it beside the guard is what stops the two Examples below from
+    going vacuous: either would also pass if [socketpair_wrap_sv] stopped
+    wrapping or [socketpair_wrap_mem] stopped mapping the range, and then
+    they would be testing nothing.  With this beside them the pair can
+    only both hold when the range really is mapped end to end AND the
+    guard declines it anyway. -/
+theorem socketpair_wrap_would_pass_the_bare_walk :
+  read_bytes_map socketpair_wrap_mem socketpair_wrap_sv (Z_to_bv 64 8) ≠ none
+:= by
+  have h : read_bytes_map socketpair_wrap_mem socketpair_wrap_sv (Z_to_bv 64 8)
+      = some [0, 0, 0, 0, 0, 0, 0, 0] := by rfl
+  rw [h]
+  intro hh
+  cases hh
+
+/-! The guard declines it, because [State.access_okb] — the model's
+    transcription of [__access_ok], written as a subtraction so the
+    wrapping sum is never formed — refuses the range on its
+    [addr <= TASK_SIZE - size] half.  Delete the conjunct from
+    [Specs.socketpair_dest_writable] and this Example fails. -/
+theorem socketpair_wrap_dest_is_not_writable :
+  socketpair_dest_writable socketpair_wrap_mem socketpair_wrap_sv = false
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE ONE THAT MATTERS, at the checker: -EFAULT with nothing written is
+    the answer, and the write the bare walk would admit is refused.  The
+    second half is the negative direction — the effect it rejects is
+    exactly the one Linux cannot produce and the bare walk would accept,
+    two descriptor numbers stored at [2^64 - 4] and, after the word
+    wrapped, at 0. -/
+theorem socketpair_wrapping_destination_is_efault :
+  check_syscall (SyscallInput.mkInput 199 [2, 1, 0, socketpair_wrap_sv, 0, 0]
+                   (fun _ => none) socketpair_wrap_mem)
+    (mkEffect (errno_ret EFAULT) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, socketpair_wrap_sv, 0, 0]
+                     (fun _ => none) socketpair_wrap_mem)
+       (mkEffect (errno_ret EOPNOTSUPP)
+                 [(socketpair_wrap_sv, [3,0,0,0]), (0, [4,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! PAST [TASK_SIZE], WHERE THE RANGE DOES NOT WRAP AND IS STILL
+    REFUSED.  This is the case that discriminates the guard, exactly as
+    [Checks.Cases.Uaccess.high_range_is_refused] does for the shared one:
+    [sv = 2^63] with an 8-byte destination sums to 2^63 + 8, comfortably
+    under 2^64, so the walk visits the bytes the sum names and a bare
+    no-wrap test would admit it.  riscv64's [access_ok] refuses it
+    anyway, because [__access_ok] tests [addr <= TASK_SIZE - size].
+    Without this pair the three Examples above pass under either
+    spelling.  The boundary itself is [socketpair_dest_width_is_eight]
+    below, which measures the WIDTH of the conjunct. -/
+def socketpair_high_mem : word → Option byte :=
+  fun a => if (decide (2 ^ 63 ≤ bv_unsigned a) && decide (bv_unsigned a < 2 ^ 63 + 8))
+           then some (Z_to_bv 8 0) else none
+
+/-! The control, in the same shape and for the same reason as
+    [socketpair_wrap_would_pass_the_bare_walk] above: the range really is
+    mapped end to end, so the guard Example beside it cannot pass by the
+    memory quietly stopping short. -/
+theorem socketpair_high_range_reads :
+  read_bytes_map socketpair_high_mem (Z_to_bv 64 (2 ^ 63)) (Z_to_bv 64 8)
+    ≠ none
+:= by
+  have h : read_bytes_map socketpair_high_mem (Z_to_bv 64 (2 ^ 63)) (Z_to_bv 64 8)
+      = some [0, 0, 0, 0, 0, 0, 0, 0] := by rfl
+  rw [h]
+  intro hh
+  cases hh
+
+/-! And it does NOT wrap — its [Z] sum is 2^63 + 8, under 2^64 — so a
+    bare no-wrap test would have admitted it.  This Example is about the
+    WITNESS and not about the guard: it is what makes
+    [socketpair_past_long_max_is_not_writable] below read as a statement
+    about [TASK_SIZE] rather than about the wrap, and it is that one,
+    not this one, that fails when the conjunct is deleted. -/
+theorem socketpair_high_range_would_pass_a_no_wrap_test :
+  decide (two_pow_64 ≤ bv_unsigned (Z_to_bv 64 (2 ^ 63))
+                 + bv_unsigned (Z_to_bv 64 8)) = false
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+theorem socketpair_past_long_max_is_not_writable :
+  socketpair_dest_writable socketpair_high_mem (Z_to_bv 64 (2 ^ 63)) = false
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+theorem socketpair_past_long_max_at_the_checker :
+  check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (2 ^ 63), 0, 0]
+                   (fun _ => none) socketpair_high_mem)
+    (mkEffect (errno_ret EFAULT) [] []) (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (2 ^ 63), 0, 0]
+                     (fun _ => none) socketpair_high_mem)
+       (mkEffect (errno_ret EOPNOTSUPP)
+                 [(Z_to_bv 64 (2 ^ 63), [3,0,0,0]),
+                  (Z_to_bv 64 (2 ^ 63 + 4), [4,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! THE WIDTH OF THE CONJUNCT IS 8, AND THIS IS WHAT PINS IT.  Three
+    adjacent destinations, one step apart at the top of what
+    [State.access_okb] accepts, over [wmem_open] so that the MAPPING is
+    settled for all three and the only thing separating them is the
+    [TASK_SIZE] test:
+
+    - [TASK_SIZE - 8] is the LAST [sv] whose two 4-byte stores are
+      BOTH accepted, so the spec still answers with both writes.  This is
+      the positive half: the conjunct costs the walk nothing it was ever
+      entitled to.  A target that answered -EFAULT there instead is
+      refused.
+
+    - [TASK_SIZE - 7] is the first where the SECOND store is refused
+      and the first is not, so Linux writes [fd1] (the page is mapped
+      here) and returns -EFAULT — a PARTIAL write this model cannot
+      express — and the model declines.  Narrow the conjunct to 4 and
+      this case turns into two writes, which Linux never produces.
+    - [TASK_SIZE - 3] is the first where the FIRST store is refused,
+      so nothing is written and -EFAULT is the whole answer.
+
+    With [State.TASK_SIZE] the kernel of record's own limit, the three
+    bullets are flat claims about Linux at three addresses under Sv48.
+    The middle one is the case with teeth, and it is the reason the
+    conjunct is [access_okb sv 8] rather than [access_okb sv 4]; widen it
+    to 16 and the first case falls through instead.
+
+    NOTE WHAT THE FIRST CASE ASSUMES.  It has a destination MAPPED in the
+    last eight bytes under [TASK_SIZE], where a real process's stack top
+    can sit ([State.sp_window_hi] is the same number), so the shape is
+    reachable and not only expressible.  [wmem_open] is the map that
+    makes it so. -/
+theorem socketpair_dest_width_is_eight :
+  check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (TASK_SIZE - 8), 0, 0]
+                   (fun _ => none) wmem_open)
+    (mkEffect (errno_ret EOPNOTSUPP)
+              [(Z_to_bv 64 (TASK_SIZE - 8), [3,0,0,0]),
+               (Z_to_bv 64 (TASK_SIZE - 4), [4,0,0,0])] [])
+    (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+  = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (TASK_SIZE - 8), 0, 0]
+                     (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EFAULT) [] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckReject
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (TASK_SIZE - 7), 0, 0]
+                     (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EOPNOTSUPP)
+                 [(Z_to_bv 64 (TASK_SIZE - 7), [3,0,0,0]),
+                  (Z_to_bv 64 (TASK_SIZE - 3), [4,0,0,0])] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckUnmodeled
+  ∧ check_syscall (SyscallInput.mkInput 199 [2, 1, 0, Z_to_bv 64 (TASK_SIZE - 3), 0, 0]
+                     (fun _ => none) wmem_open)
+       (mkEffect (errno_ret EFAULT) [] [])
+       (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+     = check_result.CheckOk (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)) []
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+end LinuxSem.Checks.Cases.Net.Socket

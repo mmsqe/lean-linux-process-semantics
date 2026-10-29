@@ -1,0 +1,12 @@
+The definitions in this directory are translated from:
+
+  - Rocq standard library, theories/Floats/SpecFloat.v  (LGPL-2.1)
+  - Flocq, IEEE754/BinarySingleNaN.v                     (LGPL-3)
+
+They are a derived work of those files and are distributed under the
+GNU Lesser General Public License, either version 2.1 or (at your
+option) any later version for the SpecFloat part, and version 3 for the
+Flocq part.
+
+The rest of this repository is MIT-licensed (see ../../LICENSE); upstream
+rocq-linux-process-semantics is MIT and depends on Flocq in the same way.
