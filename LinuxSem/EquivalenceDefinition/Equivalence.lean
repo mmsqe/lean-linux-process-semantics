@@ -508,7 +508,7 @@ theorem image_entry_fetchable_nil (pc : Nat) : image_entry_fetchable [] pc = fal
     AT_PHNUM = 0 is precisely the "libc finds no PT_TLS" state this
     datum exists to rule out.  Every ELF the loader accepts has at least
     one program header (it needs one covering `e_phoff` to publish
-    AT_PHDR at all) and `e_phentsize` >= 56. -/
+    AT_PHDR at all) and `e_phentsize` = 56. -/
 def image_phdrs_readable (segs : List Segment) (ph : PhdrInfo) : Bool :=
   decide (0 < ph.ph_num) && decide (0 < ph.ph_ent) &&
   match memory_read segs (BitVec.ofInt 64 (ph.ph_addr : Int))
