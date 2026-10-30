@@ -316,6 +316,7 @@ import LinuxSem.Checks.Cases.Mm.Mmap
 
 import LinuxSem.Checks.Cases.Uaccess
 import LinuxSem.Checks.Cases.VaSize
+import LinuxSem.Checks.Cases.MmapBase
 import LinuxSem.Checks.Cases.Hwcap
 
 import LinuxSem.Checks.Cases.Mm.Mremap
@@ -363,6 +364,16 @@ import LinuxSem.Checks.RiscvSegmentChunks
 import LinuxSem.Checks.Examples
 
 import LinuxSem.Checks.VmMapsDisjoint
+
+import LinuxSem.Checks.MapsFit
+import LinuxSem.Checks.NoaccessOwned
+
+import LinuxSem.Checks.BudgetPremiseInv
+import LinuxSem.Checks.BudgetPremiseMremap
+
+import LinuxSem.Checks.MmStepFrame
+import LinuxSem.Checks.MunmapCut
+import LinuxSem.Checks.OversizeReachable
 
 import LinuxSem.Checks.AbortWitness
 

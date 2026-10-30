@@ -129,3 +129,52 @@ open LinuxSem
 
 #print axioms Checks.ErrorFreeInput.exit0_must_exit_zero_at_source_budget
 #print axioms Checks.HaltsAllowed.exit1_must_exit_reject
+
+/- 11. The ledger invariants hold of every reachable state, and the two new
+       ones are carried along a whole run. -/
+
+#print axioms Checks.MapsFit.check_syscall_preserves_vm_fit
+#print axioms Checks.MapsFit.syscall_spec_preserves_vm_fit
+#print axioms Checks.NoaccessOwned.check_syscall_preserves_sys_inv
+#print axioms Checks.NoaccessOwned.syscall_spec_preserves_sys_inv
+#print axioms Checks.NoaccessOwned.checked_table_preserves_na
+#print axioms Checks.NoaccessOwned.sys_inv_noaccess_pages_owned
+#print axioms Checks.NoaccessOwned.star_preserves_sys_inv
+#print axioms Checks.NoaccessOwned.star_cfg_preserves_sys_inv
+#print axioms Checks.NoaccessOwned.init_config_star_sys_inv
+
+/- 12. The mremap budget mark reads "no placement fits", and on a state that
+       keeps the ledger invariants a marked request has no non-errno
+       resolution. -/
+
+#print axioms Checks.BudgetPremise.mremap_budget_refused_iff
+#print axioms Checks.BudgetPremise.mremap_budget_refused_refuses_inplace
+#print axioms Checks.BudgetPremise.mremap_budget_refused_refuses_move
+#print axioms Checks.BudgetPremiseInv.mremap_move_budget_admits_fresh
+#print axioms Checks.BudgetPremiseInv.mremap_fresh_b_intro_sys_inv
+#print axioms Checks.BudgetPremiseMremap.mremap_budget_refused_is_refusal_sys_inv
+
+/- 13. A successful mmap, mremap or brk keeps the run going and touches no user
+       memory, and a partial munmap's 0 answer leaves exactly the bytes and the
+       pages outside the range. -/
+
+#print axioms Checks.MmStepFrame.mm_ok_step
+#print axioms Checks.MmStepFrame.mm_ok_no_accesses
+#print axioms Checks.MunmapCut.check_munmap_zero_owned
+#print axioms Checks.MunmapCut.check_munmap_zero_pages
+#print axioms Checks.MunmapCut.check_munmap_unmap_backing
+
+/- 14. A request whose charge alone exceeds the budget is no longer excused by
+       the budget premise, and the finer premise is refutable on a run. -/
+
+#print axioms EquivalenceDefinition.Equivalence.strong_universal_error_free_T_budgets_only_subsumes
+#print axioms Checks.OversizeReachable.mm_errors
+#print axioms Checks.OversizeReachable.mm_refutes_budgets_only
+#print axioms Checks.OversizeReachable.cm_run_budget_only_refused
+
+/- 15. The mmap-base band is exactly the set of bases Linux gives. -/
+
+#print axioms Checks.Cases.MmapBase.sv48_band_is_linux_set
+#print axioms Checks.Cases.MmapBase.sv39_band_is_linux_set
+#print axioms Checks.Cases.MmapBase.rnd_bits_25_and_a_huge_guard_go_below_the_floor
+#print axioms Checks.Cases.MmapBase.floor_guard_max_is_tight
