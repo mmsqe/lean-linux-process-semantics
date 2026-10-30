@@ -680,8 +680,11 @@ def map_has (maps : List (word × word)) (lo n : word) : Bool :=
     `Mremap.mremap_fresh_avoids_noaccess` is the consumer: assuming this, a
     destination `mremap_fresh_b` accepts is disjoint from `vm_noaccess`,
     which is the property the predicate's comment argues informally.
-    Proving the invariant PRESERVED by the nine writers of `vm_noaccess` is
-    the remaining half, and is not done here. -/
+    `Checks/NoaccessOwned.lean` proves it of every reachable state: a
+    stronger invariant `sys_inv` holds of `init_model`
+    (`init_model_sys_inv`), every step of a run keeps it
+    (`star_preserves_sys_inv`), and it gives this one
+    (`sys_inv_noaccess_pages_owned`). -/
 def noaccess_pages_owned (h : VmMaps) : Prop :=
   ∀ a n,
     (a, n) ∈ h.vm_noaccess →
@@ -695,8 +698,9 @@ def noaccess_pages_owned (h : VmMaps) : Prop :=
 
 /-- The nonemptiness conjunct of that invariant, on its own.
 
-    The two conjuncts are not equally hard.  The page-ownership half is the
-    one no writer is yet shown to preserve, and it is why
+    The two conjuncts are not equally hard.  The page-ownership half is
+    kept only through the stronger `Checks.NoaccessOwned.sys_inv`, and it
+    is why
     `Mremap.mremap_fresh_avoids_noaccess` takes the whole invariant as a
     hypothesis.  The NONEMPTINESS half is preserved by construction, and it
     is what every `region_free` reader of `vm_noaccess` actually leans on —
@@ -719,12 +723,10 @@ def noaccess_pages_owned (h : VmMaps) : Prop :=
     inline get a lemma that RESTATES the record, with the cost of that
     restatement stated where the lemmas are.
 
-    WHAT IS STILL NOT A THEOREM is the composition: no statement in the tree
-    concludes that a REACHABLE model satisfies this.  The base case and
-    every writer are proved; the induction over the specs' own branch
-    structure is not carried out, so a consumer takes this as a hypothesis
-    and the step that discharges it is a reader's, made against that list of
-    writers. -/
+    THE COMPOSITION is `Checks/NoaccessOwned.lean`'s: `init_model_sys_inv`
+    holds at the start, `star_preserves_sys_inv` (and
+    `star_cfg_preserves_sys_inv`) carries `sys_inv` along every execution,
+    and `sys_inv` gives `noaccess_pages_owned` and so this. -/
 def vm_noaccess_entries_nonzero (h : VmMaps) : Prop :=
   entries_nonzero h.vm_noaccess
 

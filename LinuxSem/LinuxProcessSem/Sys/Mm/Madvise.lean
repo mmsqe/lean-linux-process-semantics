@@ -247,12 +247,14 @@ def madvise_dontneed_ok (h : VmMaps) (addr n : word) : Bool :=
     writer outside that file.  Two things that section says and this
     must not overstate: the lemmas for the arms that write their
     post-state inline RESTATE the record rather than naming it, so a
-    re-shaped arm would not break them; and nothing in the tree
-    COMPOSES the lemmas into "every reachable model satisfies it",
-    because the induction over the specs' branch structure is not
-    carried out.  That is why the lemma below takes the property as a
-    HYPOTHESIS rather than proving it of the state it is handed.  A
-    caller discharges it from the writer that produced the state, and
+    re-shaped arm would not break them; and the composition into "every
+    reachable model satisfies it" is `Checks/NoaccessOwned.lean`'s
+    (`init_model_sys_inv`, `star_preserves_sys_inv`,
+    `sys_inv_noaccess_pages_owned`, then
+    `State.noaccess_pages_owned_nonzero`), which this file cannot import,
+    so the lemma below takes the property as a HYPOTHESIS; a caller
+    discharges it from those lemmas, or from the writer that produced the
+    state, and
     this tree HAS such a caller: `Checks/Cases/Mm/Madvise.lean`'s
     [madvise_noaccess_remnant_decline_names_a_byte] builds a protected
     ledger by cutting a recorded range in two with
