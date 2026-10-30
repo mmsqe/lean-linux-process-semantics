@@ -164,16 +164,154 @@ theorem munmap_free_range_in_the_stack_band_is_unmodeled :
   = .CheckUnmodeled
 := by rfl
 
-/-! A PARTIAL unmap (Linux would split the mapping) is unmodeled and
-    fails closed. -/
+/-! A PARTIAL unmap: Linux splits the VMA and unmaps the range
+    ([Mmap.munmap_spec]).  The first page of a two-page mapping goes, the
+    second stays, and an answer that keeps the page mapped is rejected. -/
 
-theorem munmap_partial_is_error :
+theorem munmap_partial_splits_the_mapping :
   check_syscall (SyscallInput.mkInput 215 [65536, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(65536, 4096)] [] [])
+    (with_vmmaps (mkVmMaps [] [(65536, 8192)] 0 0 demo_limit)
+                 (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)))
+  = .CheckOk
+      (with_vmmaps (mkVmMaps [] [(69632, 4096)] 0 0 demo_limit)
+                 (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))) []
+  ∧ check_syscall (SyscallInput.mkInput 215 [65536, 4096, 0, 0, 0, 0]
                    (fun _ => none) (fun _ => none))
     (mkEffect 0 [] [])
     (with_vmmaps (mkVmMaps [] [(65536, 8192)] 0 0 demo_limit)
                  (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)))
+  = .CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The partial-unmap shapes, on a four-page mapping [0x10000, 0x14000). -/
+def four_page_model : Model :=
+  with_vmmaps (mkVmMaps [] [(65536, 16384)] 0 0 demo_limit)
+              (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+
+def maps_model (maps : List (word × word)) : Model :=
+  with_vmmaps (mkVmMaps [] maps 0 0 demo_limit)
+              (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
+
+/-! Head trim: the first page goes. -/
+theorem munmap_head_trim :
+  check_syscall (SyscallInput.mkInput 215 [65536, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(65536, 4096)] [] []) four_page_model
+  = .CheckOk (maps_model [(69632, 12288)]) []
+:= by rfl
+
+/-! Tail trim: the last page goes. -/
+theorem munmap_tail_trim :
+  check_syscall (SyscallInput.mkInput 215 [77824, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(77824, 4096)] [] []) four_page_model
+  = .CheckOk (maps_model [(65536, 12288)]) []
+:= by rfl
+
+/-! Middle split: the second page goes, and the mapping is two. -/
+theorem munmap_middle_split :
+  check_syscall (SyscallInput.mkInput 215 [69632, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(69632, 4096)] [] []) four_page_model
+  = .CheckOk (maps_model [(65536, 4096), (73728, 8192)]) []
+:= by rfl
+
+/-! A length that is not a page multiple is rounded up, as for an exact
+    unmap: 4097 bytes from the head take two pages. -/
+theorem munmap_head_trim_rounds_len :
+  check_syscall (SyscallInput.mkInput 215 [65536, 4097, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(65536, 8192)] [] []) four_page_model
+  = .CheckOk (maps_model [(73728, 8192)]) []
+:= by rfl
+
+/-! Several mappings: the range ends inside the first, covers the
+    second whole, and starts inside the third. -/
+theorem munmap_spans_three_mappings :
+  check_syscall (SyscallInput.mkInput 215 [69632, 16384, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(69632, 16384)] [] [])
+    (maps_model [(65536, 8192), (73728, 8192), (81920, 8192)])
+  = .CheckOk (maps_model [(65536, 4096), (86016, 4096)]) []
+:= by rfl
+
+/-! Holes: a range over two mappings and the free page between them
+    removes both, and a range that starts in free space and ends inside
+    a mapping trims its head.  Linux returns 0 for both. -/
+theorem munmap_range_with_hole :
+  check_syscall (SyscallInput.mkInput 215 [65536, 12288, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(65536, 12288)] [] [])
+    (maps_model [(65536, 4096), (73728, 4096)])
+  = .CheckOk (maps_model []) []
+:= by rfl
+
+theorem munmap_hole_then_head :
+  check_syscall (SyscallInput.mkInput 215 [61440, 8192, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(61440, 8192)] [] []) four_page_model
+  = .CheckOk (maps_model [(69632, 12288)]) []
+:= by rfl
+
+/-! The split can fail with -ENOMEM before any page goes
+    ([vms_gather_munmap_vmas]): the model is unchanged, and an -ENOMEM
+    that also unmaps is rejected. -/
+theorem munmap_partial_enomem :
+  check_syscall (SyscallInput.mkInput 215 [69632, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret ENOMEM) [] []) four_page_model
+  = .CheckOk four_page_model []
+  ∧ check_syscall (SyscallInput.mkInput 215 [69632, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU (errno_ret ENOMEM) [] [] [(69632, 4096)] [] [])
+    four_page_model
+  = .CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! Negative controls.  An unaligned [addr] is still -EINVAL before the
+    ledger is read, and the cut it would make is rejected.  A partial
+    unmap that touches the image, or reaches into the stack band, is
+    still unmodeled. -/
+theorem munmap_partial_unaligned_einval :
+  check_syscall (SyscallInput.mkInput 215 [69633, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (mkEffect (errno_ret EINVAL) [] []) four_page_model
+  = .CheckOk four_page_model []
+  ∧ check_syscall (SyscallInput.mkInput 215 [69633, 4096, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(69632, 4096)] [] []) four_page_model
+  = .CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+theorem munmap_partial_over_image_is_unmodeled :
+  check_syscall (SyscallInput.mkInput 215 [61440, 8192, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(61440, 8192)] [] [])
+    (with_vmmaps (mkVmMaps [(57344, 8192)] [(65536, 16384)] 0 0 demo_limit)
+                 (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof)))
   = .CheckUnmodeled
+:= by rfl
+
+theorem munmap_partial_into_stack_band_is_unmodeled :
+  check_syscall (SyscallInput.mkInput 215 [Z_to_bv 64 (demo_top - 4096), 8192, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(Z_to_bv 64 (demo_top - 4096), 8192)] [] [])
+    (maps_model [(Z_to_bv 64 (demo_top - 8192), 8192)])
+  = .CheckUnmodeled
+:= by rfl
+
+/-! The trim a sealed MSan runtime makes ([MmapAlignedOrDieOnFatalError]):
+    map 2 MiB, keep the lower 1 MiB. -/
+theorem munmap_msan_aligned_trim :
+  check_syscall (SyscallInput.mkInput 215
+                   [Z_to_bv 64 0x7f0000100000, 1048576, 0, 0, 0, 0]
+                   (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] []
+      [(Z_to_bv 64 0x7f0000100000, 1048576)] [] [])
+    (maps_model [(Z_to_bv 64 0x7f0000000000, 2097152)])
+  = .CheckOk (maps_model [(Z_to_bv 64 0x7f0000000000, 1048576)]) []
 := by rfl
 
 /-! Reason 3.  [check_munmap]'s gate bounds the SUM [addr + nZ] by
@@ -357,11 +495,19 @@ theorem munmap_high_addr_sum_wraps_is_einval :
     Reason 4: no live run can reach it.  A trace would have to grow a tracked
     mapping in place across its run's [alloc_top].  Linux's top-down
     [mmap_base] sits at least [stack_guard_gap] below the deepest legal
-    stack (mm/util.c [mmap_base], Linux v6.18.46), so an ordinary run's
-    grants end under the stack's bottom — the exception is an argv image
-    over 1 MiB, a known limitation of the model.  The bound is the
-    model's stack-disjointness
-    rule; see [State.alloc_top]. -/
+    stack, or [MAX_GAP] below [STACK_TOP] when a large guard makes the gap
+    clamp (mm/util.c:456-461, [mmap_base], Linux v6.18.46).  The other
+    case is a guard within one stack pad plus the stack rlimit of 2^64: the
+    pad wraps (mm/util.c:450), or the sum wraps and the test at :453 keeps
+    the rlimit alone.  The gap is then at most 0x407fe000 and can clamp up
+    to [MIN_GAP], so under [PF_RANDOMIZE] the base can be from one page to
+    0x387ff000 bytes above the deepest stack bottom, up to
+    [STACK_TOP - MIN_GAP].  So with any smaller guard a live run's grants
+    end under the stack's bottom.  With a guard in that range Linux can
+    place a mapping above [alloc_top], which the model refuses: there the
+    model's stack-disjointness rule ([State.alloc_top]) is narrower than
+    Linux.  The other exception is an argv image over 1 MiB, a known
+    limitation of the model. -/
 
 /-! And, as with the image conjunct, it closes the in-place ARM rather than
     the call: from the same ledger a move down to free space is still
@@ -441,8 +587,8 @@ theorem munmap_high_addr_sum_wraps_is_einval :
 
     Two things follow, and together they are why the gap costs precision
     and not soundness.  The model really does claim the source gone, so no
-    later call can be answered out of it — [Mremap.mremap_source_b] and
-    [Mmap.munmap_spec] both go through [map_has], which now fails, i.e.
+    later call can be answered out of it — [Mremap.mremap_source_b]
+    goes through [map_has], which now fails, i.e.
     fail closed. And the two free sets
     differ EXACTLY on the regions that meet the retained source: everything
     the divergent kernel still considers free the model considers free too,
@@ -1731,8 +1877,11 @@ theorem mmap_fixed_errno_unmap_must_be_the_request :
 
 /-! Reason: it pins model-internal state no execution reveals.  Outside the
     documented final-page tail of a byte-granular brk shrink, `State`
-    purpose (c) says [vm_noaccess] is owned by [vm_maps], and nothing
-    enforces it.  A ledger with no owner at all must not let mprotect return
+    purpose (c) says `vm_noaccess` is owned by `vm_maps`; on every
+    reachable state that ownership holds page by page
+    (`Checks.NoaccessOwned.init_config_star_sys_inv` with
+    `NoaccessOwned.sys_inv_noaccess_pages_owned`), but this state is built
+    by hand.  A ledger with no owner at all must not let mprotect return
     0 and zero-fill a range the model does
     not own — Linux answers -ENOMEM for a range starting outside every VMA
     (Linux v6.12, mm/mprotect.c:753, :765-766) — so the exposure branch
@@ -2474,6 +2623,37 @@ theorem munmap_forgets_lazy_and_materialized_metadata :
       (with_mmap_destroyed 65536 8192 (mkVmMaps [] [] 0 0 8192)
         mmap_lazy_materialized) []
 := by rfl
+
+/-! A partial unmap of the same lazy mapping forgets the lazy range and
+    the materialized page inside the cut, through the same
+    `with_mmap_destroyed` as the whole unmap above: the one page still
+    charged is the one outside the cut, and unmapping it too brings the
+    charge to 0. -/
+theorem munmap_partial_forgets_cut_backing :
+  check_syscall
+    (SyscallInput.mkInput 215 [65536, 4096, 0, 0, 0, 0]
+      (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(65536, 4096)] [] []) mmap_lazy_materialized
+  = .CheckOk
+      (with_mmap_destroyed 65536 4096 (mkVmMaps [] [(69632, 4096)] 0 0 8192)
+        mmap_lazy_materialized) []
+:= by rfl
+
+theorem munmap_partial_backing_then_rest :
+  let post := with_mmap_destroyed 65536 4096
+                (mkVmMaps [] [(69632, 4096)] 0 0 8192)
+                mmap_lazy_materialized
+  m_vm_lazy post = [(69632, 4096)] ∧ m_vm_materialized post = [69632] ∧
+  vm_backing_used post = 4096 ∧
+  check_syscall
+    (SyscallInput.mkInput 215 [69632, 4096, 0, 0, 0, 0]
+      (fun _ => none) (fun _ => none))
+    (SyscallEffect.mkEffectU 0 [] [] [(69632, 4096)] [] []) post
+  = .CheckOk
+      (with_mmap_destroyed 69632 4096 (mkVmMaps [] [] 0 0 8192) post) [] ∧
+  vm_backing_used
+    (with_mmap_destroyed 69632 4096 (mkVmMaps [] [] 0 0 8192) post) = 0
+:= by (try dsimp only); (repeat constructor) <;> rfl
 
 theorem munmap_metadata_cannot_be_recharged_after_removal :
   let post := with_mmap_destroyed 65536 8192 (mkVmMaps [] [] 0 0 8192)

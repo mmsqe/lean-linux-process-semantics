@@ -412,7 +412,9 @@ end
     -EINVAL; the page-rounded end past `TASK_SIZE` is -EINVAL; a request
     that IS a recorded mapping must return 0, unmap exactly the request
     and step the model with the removal; a free range below the stack band
-    is a no-op 0; and everything else declines. -/
+    is a no-op 0; a partial unmap below the band returns 0 and the
+    post-state of a destructive MAP_FIXED failure, or the arm's one
+    injectable errno with nothing changed; and everything else declines. -/
 def check_munmap (addr len : word) (eff : SyscallEffect) (m : Model)
     : check_result :=
   if !(((addr.toNat : Int) % page_size) == 0) || w_is0 len then
@@ -442,6 +444,19 @@ def check_munmap (addr len : word) (eff : SyscallEffect) (m : Model)
         | _ => .CheckReject
       else if munmap_free_ok (m_vmmaps m) addr nZ then
         check_ret_only eff (BitVec.ofInt 64 0) m []
+      else if munmap_cut_ok (m_vmmaps m) addr nZ then
+        match eff with
+        | ⟨r, [], [], us, [], []⟩ =>
+            if errno_ret_in munmap_errnos r then
+              match us with
+              | [] => .CheckOk m []
+              | _ => .CheckReject
+            else if w_is0 r && listNN_eqb us [(addr, n)]
+            then .CheckOk
+              (with_mmap_destroyed addr n
+                (mmap_fixed_destroyed_next (m_vmmaps m) addr n) m) []
+            else .CheckReject
+        | _ => .CheckReject
       else .CheckUnmodeled
 
 /- ------------------------------------------------------------------ mremap
@@ -2535,8 +2550,48 @@ theorem check_munmap_sound_ok (addr len : word) (eff : SyscallEffect) (m m' : Mo
           obtain ⟨rfl, rfl, rfl⟩ :=
             (check_ret_only_ok_iff eff (BitVec.ofInt 64 0) m [] m' evs).mp H
           exact pure_ok _ i _
-        · rw [ite_eq_right hfree] at H
-          exact nomatch H
+        · rw [ite_eq_right hfree] at H ⊢
+          by_cases hcut : munmap_cut_ok (m_vmmaps m) addr
+              (page_round_up_Z (len.toNat : Int)) = true
+          · -- the partial arm: -ENOMEM with nothing unmapped, or the cut
+            rw [ite_eq_left hcut] at H ⊢
+            obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
+            cases ws <;> cases zs <;> cases cs <;> cases copyins <;> dsimp only at H
+            · by_cases he : errno_ret_in munmap_errnos r = true
+              · rw [ite_eq_left he] at H
+                cases us with
+                | nil =>
+                    simp only [check_result.CheckOk.injEq] at H
+                    obtain ⟨hm, hevs⟩ := H
+                    subst hm
+                    subst hevs
+                    obtain ⟨e, hmem, hre⟩ := (errno_ret_in_true _ _).mp he
+                    subst hre
+                    exact alt_l _ _ i m _
+                      (bind_ok0 _ _ i m e m _ m []
+                        (choose_ok _ e i m hmem) (pure_ok _ i m))
+                | cons u us' => exact nomatch H
+              · rw [ite_eq_right he] at H
+                by_cases hc : (w_is0 r && listNN_eqb us [(addr, n)]) = true
+                · rw [ite_eq_left hc] at H
+                  simp only [check_result.CheckOk.injEq] at H
+                  obtain ⟨hm, hevs⟩ := H
+                  subst hm
+                  subst hevs
+                  obtain ⟨hr, hus⟩ := (Bool.and_eq_true ..).mp hc
+                  have hr0 : r = BitVec.ofInt 64 0 :=
+                    (Fs.bv_eqb_eq r _).mp (by simpa [w_is0] using hr)
+                  have hus' : us = [(addr, n)] := (listNN_eqb_eq us _).mp hus
+                  subst hr0
+                  subst hus'
+                  exact alt_r _ _ i m _
+                    (bind_ok0 _ _ i m () _ _ _ []
+                      (modify_ok _ i m) (pure_ok _ i _))
+                · rw [ite_eq_right hc] at H
+                  exact nomatch H
+            all_goals exact nomatch H
+          · rw [ite_eq_right hcut] at H
+            exact nomatch H
 
 theorem check_munmap_sound_unmodeled (addr len : word) (eff : SyscallEffect) (m : Model)
     (i : SyscallInput) (H : check_munmap addr len eff m = .CheckUnmodeled) :
@@ -2570,7 +2625,24 @@ theorem check_munmap_sound_unmodeled (addr len : word) (eff : SyscallEffect) (m 
         · rw [ite_eq_left hfree] at H
           exact absurd H (check_ret_only_no_unmodeled eff (BitVec.ofInt 64 0) m [])
         · rw [ite_eq_right hfree] at H ⊢
-          exact unmodeled_intro i m
+          by_cases hcut : munmap_cut_ok (m_vmmaps m) addr
+              (page_round_up_Z (len.toNat : Int)) = true
+          · -- the partial arm answers; it cannot decline
+            rw [ite_eq_left hcut] at H
+            exfalso
+            revert H
+            obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
+            cases ws <;> cases zs <;> cases cs <;> cases copyins <;> dsimp only <;>
+              intro H
+            · by_cases he : errno_ret_in munmap_errnos r = true
+              · rw [ite_eq_left he] at H
+                cases us <;> exact nomatch H
+              · rw [ite_eq_right he] at H
+                by_cases hc : (w_is0 r && listNN_eqb us [(addr, n)]) = true <;>
+                  simp [hc] at H
+            all_goals exact nomatch H
+          · rw [ite_eq_right hcut] at H ⊢
+            exact unmodeled_intro i m
 
 theorem check_munmap_complete_ok (addr len : word) (eff : SyscallEffect) (m m' : Model)
     (evs : List event) (i : SyscallInput)
@@ -2617,8 +2689,38 @@ theorem check_munmap_complete_ok (addr len : word) (eff : SyscallEffect) (m m' :
             Outcome.ok.injEq] at H
           obtain ⟨rfl, rfl, rfl⟩ := H
           simp [check_ret_only, bv_eqb_refl]
-        · rw [ite_eq_right hfree] at H
-          exact nomatch H
+        · rw [ite_eq_right hfree] at H ⊢
+          by_cases hcut : munmap_cut_ok (m_vmmaps m) addr
+              (page_round_up_Z (len.toNat : Int)) = true
+          · rw [ite_eq_left hcut] at H ⊢
+            rcases H with h | h
+            · -- -ENOMEM, nothing unmapped
+              obtain ⟨e, m1, evs1, evs2, hch, hk, heq⟩ := h
+              obtain ⟨e0, hmem, ho⟩ := hch
+              cases ho
+              cases hk
+              cases heq
+              dsimp only
+              rw [ite_eq_left (errno_ret_in_intro munmap_errnos e hmem)]
+              rfl
+            · -- the cut
+              obtain ⟨u, m1, evs1, evs2, hmod, hpure, heq⟩ := h
+              cases hmod
+              cases hpure
+              cases heq
+              have hzn : ¬ (errno_ret_in munmap_errnos (BitVec.ofInt 64 0) = true) :=
+                by decide
+              have hw0 : w_is0 (BitVec.ofInt 64 0) = true := by
+                unfold w_is0
+                exact bv_eqb_refl _
+              have hnn : listNN_eqb [(addr, n)] [(addr, n)] = true :=
+                (listNN_eqb_eq _ _).mpr rfl
+              dsimp only
+              rw [ite_eq_right hzn,
+                ite_eq_left (by rw [hw0, hnn]; rfl)]
+              rfl
+          · rw [ite_eq_right hcut] at H
+            exact nomatch H
 
 theorem check_munmap_complete_unmodeled (addr len : word) (m : Model) (i : SyscallInput)
     (eff : SyscallEffect) (H : munmap_spec addr len i m .unmodeled) :
@@ -2647,6 +2749,22 @@ theorem check_munmap_complete_unmodeled (addr len : word) (m : Model) (i : Sysca
         · rw [ite_eq_left hfree] at H
           exact nomatch H
         · rw [ite_eq_right hfree] at H ⊢
+          by_cases hcut : munmap_cut_ok (m_vmmaps m) addr
+              (page_round_up_Z (len.toNat : Int)) = true
+          · rw [ite_eq_left hcut] at H ⊢
+            rcases H with h | h
+            · -- -ENOMEM with nothing unmapped is an [ok], not an unmodeled
+              rcases h with h' | ⟨e, m1, evs1, hch, hk⟩
+              · obtain ⟨x, hx, ho⟩ := h'
+                exact nomatch ho
+              · obtain ⟨e0, hmem, ho⟩ := hch
+                cases ho
+                cases hk
+            · -- the cut is an [ok] too
+              rcases h with h' | ⟨u, m1, evs1, hmod, hpure⟩
+              · exact nomatch h'
+              · cases hpure
+          · rw [ite_eq_right hcut] at H ⊢
 
 /-! ## Sanity checks
 

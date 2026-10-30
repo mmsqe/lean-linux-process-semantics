@@ -264,7 +264,50 @@ theorem check_munmap_preserves (addr len : word) (eff : SyscallEffect) (m m' : M
           rw [check_ret_only_model (m' := m') (evs := evs) (H := H)]
           exact Hwf
         · rw [ite_eq_right hfree] at H
-          exact nomatch H
+          by_cases hcut : munmap_cut_ok (m_vmmaps m) addr
+              (page_round_up_Z (len.toNat : Int)) = true
+          · -- the partial unmap: the interval is bounded by `TASK_SIZE`
+            rw [ite_eq_left hcut] at H
+            -- the arm's gate bounds the interval by `TASK_SIZE`
+            have htop : TASK_SIZE < two_pow_64 := by decide
+            have hbig' : (addr.toNat : Int) + page_round_up_Z (len.toNat : Int) ≤
+                TASK_SIZE := by omega
+            have hnlt : page_round_up_Z (len.toNat : Int) < two_pow_64 := by
+              have h := (bv_unsigned_range_u64 addr).1
+              omega
+            have hnval : (n.toNat : Int) = page_round_up_Z (len.toNat : Int) := by
+              rw [← hn]
+              exact u64 _ ⟨page_round_up_Z_nonneg _ (by omega), hnlt⟩
+            have hhi : (addr.toNat : Int) + (n.toNat : Int) < two_pow_64 := by
+              rw [hnval]
+              omega
+            obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
+            cases ws <;> cases zs <;> cases cs <;> cases copyins <;> try dsimp only at H
+            · by_cases he : errno_ret_in munmap_errnos r = true
+              · -- -ENOMEM, nothing unmapped: the model is the start one
+                rw [ite_eq_left he] at H
+                cases us with
+                | nil =>
+                  simp only [check_result.CheckOk.injEq] at H
+                  obtain ⟨hm, hevs⟩ := H
+                  rw [hm.symm]
+                  exact Hwf
+                | cons u us' => exact nomatch H
+              · rw [ite_eq_right he] at H
+                by_cases hc : (w_is0 r && listNN_eqb us [(addr, n)]) = true
+                · -- the cut: both ledgers lose the range
+                  rw [ite_eq_left hc] at H
+                  simp only [check_result.CheckOk.injEq] at H
+                  obtain ⟨hm, hevs⟩ := H
+                  rw [hm.symm, vmm_mmap_destroyed]
+                  exact vm_wf_subtract_h (m_vmmaps m) (addr.toNat : Int)
+                    ((addr.toNat : Int) + (n.toNat : Int)) _ Hwf
+                    (by omega) (by omega) hhi
+                · rw [ite_eq_right hc] at H
+                  exact nomatch H
+            all_goals exact nomatch H
+          · rw [ite_eq_right hcut] at H
+            exact nomatch H
 
 /-! ## `mremap` — move, shrink, in-place grow -/
 

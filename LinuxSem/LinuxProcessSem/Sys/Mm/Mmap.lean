@@ -495,6 +495,7 @@ def brk_model_next (h : VmMaps) (req r : word) : VmMaps :=
        [mmap_fixed_rw_span_next]        — named; [maps_subtract]
        [Mprotect.mprotect_model_next]   — named; [maps_subtract]
        [munmap_spec]'s whole-mapping removal — inline; [maps_subtract]
+       [munmap_spec]'s partial unmap    — [mmap_fixed_destroyed_next]
 
      LEAVES THE LIST ALONE — [vm_noaccess h] carried over verbatim, so
      there is nothing to state: [Mremap.mremap_maps_next], and the rw
@@ -507,11 +508,11 @@ def brk_model_next (h : VmMaps) (req r : word) : VmMaps :=
    an entry; they are named here so the lists above are not read as the
    whole tree.
 
-   WHAT IS NOT A THEOREM HERE.  That these compose into "every reachable
-   model satisfies [State.vm_noaccess_entries_nonzero]".  The base case
-   is [State.init_model_noaccess_nonzero] and every writer is above, but
-   the induction over [mmap_spec]'s own branch structure is not carried
-   out, so that last step is a reader's, made against the lists above.
+   THE COMPOSITION is in [Checks/NoaccessOwned.lean]: "every reachable
+   model satisfies [State.vm_noaccess_entries_nonzero]" follows from
+   [init_model_sys_inv], [star_preserves_sys_inv] and
+   [sys_inv_noaccess_pages_owned] with
+   [State.noaccess_pages_owned_nonzero].
    ========================================================================= -/
 
 /-- [maps_subtract_ranges] is a fold of [State.maps_subtract], so it
@@ -2222,14 +2223,38 @@ def mmap_budget_refused_b (addr len prot flags fd off : word) (m : Model) : Bool
       stack randomisation, mm/util.c at v6.18.46, so it is at least
       1 MiB under [sp - 8 MiB] unless the argv/envp block is larger than
       that) — and a free-range unmap that lands on those is answered 0
-      here where Linux unmaps them (or, with
-      CONFIG_MSEAL_SYSTEM_MAPPINGS, refuses with -EPERM); that is a
-      premise of the model.
-    - anything else — a PARTIAL/interior/spanning unmap (Linux would
-      split the mapping), a range touching the binary image
-      ([vm_reserved] can never be unreserved), or a free range reaching
-      into the STACK BAND [[alloc_top h, TASK_SIZE)] — is unmodeled and
-      yields [unmodeled] (fail closed).  The band is the one region the
+      here where Linux unmaps them, or refuses with -EPERM when they are
+      sealed (CONFIG_MSEAL_SYSTEM_MAPPINGS; the [vma_is_sealed] tests
+      at mm/vma.c:1396-1398 and :1416-1418), or with -EINVAL when the
+      range starts or ends inside one of them: [__split_vma] asks the
+      VMA's [may_split] first (mm/vma.c:504-508), and a special
+      mapping's is [special_mapping_split], which always answers -EINVAL
+      (mm/mmap.c:1394-1403, installed for both by
+      [_install_special_mapping], :1492-1498); that is a premise of the
+      model.
+    - [addr, addr+n) meeting recorded mappings without being exactly
+      one — a head or tail trim, a hole punched in one mapping, a range
+      over several mappings or over mappings and free pages — that
+      touches no image segment and ends at or below [State.alloc_top]:
+      Linux splits the VMA the range starts inside and the one it ends
+      inside ([vms_gather_munmap_vmas], mm/vma.c:1401 and :1422),
+      detaches every VMA between, and returns 0; free pages are
+      skipped.  So the bytes outside the range stay mapped and the bytes
+      inside are unmapped.  The ledgers are cut by [maps_subtract] over
+      the range, the post-state a destructive MAP_FIXED failure writes
+      ([mmap_fixed_destroyed_next]); [with_mmap_destroyed] forgets the
+      lazy and materialized pages in the range, so their charge is
+      released as for a whole munmap; and the effect unmaps the range.
+      The free-range arm's vdso premise covers the free pages here too.
+      Linux can also answer -ENOMEM before any page is unmapped: the
+      [map_count] test of an interior split (mm/vma.c:1389-1393), a
+      [__split_vma] allocation, or a maple-tree store (:1428, :1573).
+      Each failure path re-attaches what it detached ([reattach_vmas]),
+      so the range keeps its pages.
+    - anything else — a range touching the binary image ([vm_reserved]
+      can never be unreserved), or a range reaching into the STACK BAND
+      [[alloc_top h, TASK_SIZE)] — is unmodeled and yields [unmodeled]
+      (fail closed).  The band is the one region the
       ledger does not describe: [Run.init_machine_state] zero-maps the
       stack below the entry [sp] and records it in no [VmMaps] list, so a
       range that is free by the ledger may be the stack, which Linux
@@ -2245,6 +2270,15 @@ def mmap_budget_refused_b (addr len prot flags fd off : word) (m : Model) : Bool
 def munmap_free_ok (h : VmMaps) (addr : word) (nZ : Int) : Bool :=
   region_free (h.vm_reserved ++ h.vm_maps) addr (BitVec.ofInt 64 nZ) &&
     decide ((addr.toNat : Int) + nZ ≤ alloc_top h)
+
+/-- The partial arm's guard: no image segment in the range, and the
+    range below the stack band (see [munmap_spec]). -/
+def munmap_cut_ok (h : VmMaps) (addr : word) (nZ : Int) : Bool :=
+  region_free h.vm_reserved addr (BitVec.ofInt 64 nZ) &&
+    decide ((addr.toNat : Int) + nZ ≤ alloc_top h)
+
+/-- The partial arm's runtime failure (see [munmap_spec]). -/
+def munmap_errnos : List Int := [ENOMEM]
 
 /-- writes the ledger transition as three monadic
     steps — `h <- get_vmmaps ;; set_vmmaps … ;; forget_vm_range … ;; …`.
@@ -2282,6 +2316,12 @@ def munmap_spec (addr len : word) : SysSpec SyscallEffect :=
                             h.vm_mmap_base h.vm_init_sp) m')) fun _ =>
           pure (SyscallEffect.mkEffectU (BitVec.ofInt 64 0) [] [] [(addr, n)] [] [])
       else if munmap_free_ok h addr nZ then ret_only (BitVec.ofInt 64 0)
+      else if munmap_cut_ok h addr nZ then
+        alt
+          (bind (errno_from munmap_errnos) fun e => err_ret e)
+          (bind (modify fun _ =>
+             with_mmap_destroyed addr n (mmap_fixed_destroyed_next h addr n) m) fun _ =>
+           pure (SyscallEffect.mkEffectU (BitVec.ofInt 64 0) [] [] [(addr, n)] [] []))
       else unmodeled
 
 /- =========================================================================
@@ -2460,7 +2500,7 @@ example :
 /-! ### The decision layer: munmap -/
 
 /-- `brkVm` plus ONE live anonymous mapping `[0x10000, 0x13000)` — the
-    ledger munmap's three arms are checked against. -/
+    ledger munmap's four arms are checked against. -/
 private def heapVm : VmMaps :=
   mkVmMaps [] [(BitVec.ofInt 64 0x10000, BitVec.ofInt 64 0x3000)]
     (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x10000) 0x100000
@@ -2477,6 +2517,24 @@ example : munmap_free_ok heapVm (BitVec.ofInt 64 0x10000) 0x1000 = false := by d
     `[alloc_top, TASK_SIZE)`. -/
 example :
     munmap_free_ok heapVm (BitVec.ofInt 64 0x7fff7f800000) 0x1000 = false := by decide
+
+/-- The partial arm's gate: a range that MEETS a live mapping (so it is
+    not free) but touches no image segment and ends below the stack band is
+    a cut… -/
+example : munmap_cut_ok heapVm (BitVec.ofInt 64 0x10000) 0x1000 = true := by decide
+
+/-- …the guard reads [vm_reserved] only, so a range over free pages
+    satisfies it too — the spec answers those out of the FREE arm, which is
+    tested first… -/
+example : munmap_cut_ok heapVm (BitVec.ofInt 64 0x20000) 0x1000 = true := by decide
+
+/-- …and a range reaching into the STACK BAND is neither. -/
+example :
+    munmap_cut_ok heapVm (BitVec.ofInt 64 0x7fff7f800000) 0x1000 = false := by decide
+
+/-- The partial arm's injectable set holds exactly the one errno its
+    failure path answers. -/
+example : munmap_errnos = [ENOMEM] := by decide
 
 /-- [map_has] is the exact-entry test: `[0x10000, 0x3000)` is recorded, a
     sub-range of it is not, and neither is a range starting one byte
@@ -2678,10 +2736,60 @@ private theorem munmapFreeArm {addr len : word} {i : SyscallInput} {m : Model}
     ret_only]
   exact pure_ok _ _ _
 
-/-- THE DECLINE: a range the ledger cannot describe — a partial or
-    spanning unmap, one touching the image, or one reaching into the stack
-    band — is `unmodeled`.  That is a decline, not an errno: Linux would
-    split the mapping and answer 0. -/
+/-- THE PARTIAL UNMAP: a range that MEETS live mappings without being
+    exactly one of them — a head or tail trim, a hole punched in one
+    mapping, a span over several — touching no image segment and ending at
+    or below [State.alloc_top] is split the way [vms_gather_munmap_vmas]
+    splits it (mm/vma.c:1401, :1422): 0, the range in [eff_unmaps], and the
+    ledger cut by the very transition a destructive MAP_FIXED failure
+    writes, so the bytes outside the range stay mapped. -/
+private theorem munmapCutArm {addr len : word} {i : SyscallInput} {m : Model}
+    (Halign : (addr.toNat : Int) % page_size == 0)
+    (Hlen : w_is0 len = false)
+    (Htask : ¬ (TASK_SIZE < (addr.toNat : Int) + page_round_up_Z (len.toNat : Int)))
+    (Hnot : map_has (m_vmmaps m).vm_maps addr
+              (BitVec.ofInt 64 (page_round_up_Z (len.toNat : Int))) = false)
+    (Hfree : munmap_free_ok (m_vmmaps m) addr
+               (page_round_up_Z (len.toNat : Int)) = false)
+    (Hcut : munmap_cut_ok (m_vmmaps m) addr
+               (page_round_up_Z (len.toNat : Int)) = true) :
+    munmap_spec addr len i m
+      (.ok (SyscallEffect.mkEffectU (BitVec.ofInt 64 0) [] []
+             [(addr, BitVec.ofInt 64 (page_round_up_Z (len.toNat : Int)))] [] [])
+        (with_mmap_destroyed addr
+           (BitVec.ofInt 64 (page_round_up_Z (len.toNat : Int)))
+           (mmap_fixed_destroyed_next (m_vmmaps m) addr
+             (BitVec.ofInt 64 (page_round_up_Z (len.toNat : Int)))) m) []) := by
+  simp [munmap_spec, Halign, Hlen, bind_getModel, Htask, Hnot, Hfree, Hcut]
+  exact alt_r _ _ i m _
+    (bind_ok _ _ _ _ _ _ _ _ _ _ (modify_ok _ i m) (pure_ok _ i _))
+
+/-- THE PARTIAL UNMAP'S FAILURE: the same range may fail with -ENOMEM
+    before any page is unmapped — the [map_count] test of an interior
+    split (mm/vma.c:1389-1393), a [__split_vma] allocation, or a maple
+    store — and every failure path re-attaches what it detached
+    ([reattach_vmas]), so the state is unchanged. -/
+private theorem munmapCutErrnoArm {addr len : word} {i : SyscallInput} {m : Model}
+    {e : Int}
+    (Halign : (addr.toNat : Int) % page_size == 0)
+    (Hlen : w_is0 len = false)
+    (Htask : ¬ (TASK_SIZE < (addr.toNat : Int) + page_round_up_Z (len.toNat : Int)))
+    (Hnot : map_has (m_vmmaps m).vm_maps addr
+              (BitVec.ofInt 64 (page_round_up_Z (len.toNat : Int))) = false)
+    (Hfree : munmap_free_ok (m_vmmaps m) addr
+               (page_round_up_Z (len.toNat : Int)) = false)
+    (Hcut : munmap_cut_ok (m_vmmaps m) addr
+               (page_round_up_Z (len.toNat : Int)) = true)
+    (He : e ∈ munmap_errnos) :
+    munmap_spec addr len i m (.ok (mkEffect (errno_ret e) [] []) m []) := by
+  simp [munmap_spec, Halign, Hlen, bind_getModel, Htask, Hnot, Hfree, Hcut]
+  exact alt_l _ _ i m _
+    (bind_ok _ _ _ _ _ _ _ _ _ _ (choose_ok _ e _ _ He) (pure_ok _ i m))
+
+/-- THE DECLINE: a range the ledger cannot describe — one touching the
+    image, or one reaching into the stack band — is `unmodeled`.  That is a
+    decline, not an errno: Linux would split the mapping and answer 0 (or
+    answer -EINVAL on a vdso split), neither of which the model admits. -/
 private theorem munmapDeclineArm {addr len : word} {i : SyscallInput} {m : Model}
     (Halign : (addr.toNat : Int) % page_size == 0)
     (Hlen : w_is0 len = false)
@@ -2689,9 +2797,12 @@ private theorem munmapDeclineArm {addr len : word} {i : SyscallInput} {m : Model
     (Hnot : map_has (m_vmmaps m).vm_maps addr
               (BitVec.ofInt 64 (page_round_up_Z (len.toNat : Int))) = false)
     (Hfree : munmap_free_ok (m_vmmaps m) addr
+               (page_round_up_Z (len.toNat : Int)) = false)
+    (Hcut : munmap_cut_ok (m_vmmaps m) addr
                (page_round_up_Z (len.toNat : Int)) = false) :
     munmap_spec addr len i m .unmodeled := by
-  simp [munmap_spec, Halign, Hlen, bind_getModel, Htask, Hnot, Hfree, unmodeled]
+  simp [munmap_spec, Halign, Hlen, bind_getModel, Htask, Hnot, Hfree, Hcut,
+    unmodeled]
 
 /-- A FILE-BACKED mmap (MAP_ANONYMOUS clear) declines, and it does so
     after the offset gate — which is the kernel's order. -/
@@ -2889,14 +3000,29 @@ example : munmap_spec (BitVec.ofInt 64 0x20000) (BitVec.ofInt 64 0x1000) demoInp
     no-op: Linux would unmap stack there. -/
 example : munmap_spec (BitVec.ofInt 64 0x7fff7f800000) (BitVec.ofInt 64 0x1000)
     demoInput heapModel .unmodeled := by
-  refine munmapDeclineArm ?_ ?_ ?_ ?_ ?_ <;> decide
+  refine munmapDeclineArm ?_ ?_ ?_ ?_ ?_ ?_ <;> decide
 
-/-- A PARTIAL unmap of a live mapping (Linux would split it) declines
-    too: a range the ledger does not name exactly is not a whole-mapping
-    removal. -/
+/-- A PARTIAL unmap no longer declines; it CUTS (see [munmapCutArm]).  The
+    first page of the 3-page ledger entry goes, and the effect says so. -/
 example : munmap_spec (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x1000) demoInput
-    heapModel .unmodeled := by
-  refine munmapDeclineArm ?_ ?_ ?_ ?_ ?_ <;> decide
+    heapModel
+    (.ok (SyscallEffect.mkEffectU (BitVec.ofInt 64 0) [] []
+            [(BitVec.ofInt 64 0x10000, BitVec.ofInt 64 0x1000)] [] [])
+      (with_mmap_destroyed (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x1000)
+        (mmap_fixed_destroyed_next heapVm (BitVec.ofInt 64 0x10000)
+          (BitVec.ofInt 64 0x1000)) heapModel) []) := by
+  refine munmapCutArm ?_ ?_ ?_ ?_ ?_ ?_ <;> decide
+
+/-- …and the -ENOMEM half of the same arm leaves the state untouched. -/
+example : munmap_spec (BitVec.ofInt 64 0x10000) (BitVec.ofInt 64 0x1000) demoInput
+    heapModel (.ok (mkEffect (errno_ret ENOMEM) [] []) heapModel []) := by
+  refine munmapCutErrnoArm (e := ENOMEM) ?_ ?_ ?_ ?_ ?_ ?_ ?_ <;> decide
+
+/-- The cut's ledger: `[0x10000, 0x13000)` minus `[0x10000, 0x11000)` is
+    the surviving tail, and the no-access ledger is cut the same way. -/
+example : (mmap_fixed_destroyed_next heapVm (BitVec.ofInt 64 0x10000)
+      (BitVec.ofInt 64 0x1000)).vm_maps
+    = [(BitVec.ofInt 64 0x11000, BitVec.ofInt 64 0x2000)] := by decide
 
 /-- A FILE-BACKED mmap (MAP_ANONYMOUS clear) declines — after the offset
     gate, which is the kernel's order. -/

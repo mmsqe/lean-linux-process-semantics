@@ -414,12 +414,12 @@ theorem mmap_witness_ok (addr len prot flags fd off : word) (i : SyscallInput) (
 
 end
 
-/-- munmap witness: mirrors the spec's four-way split — -EINVAL on a bad
+/-- munmap witness: mirrors the spec's five-way split — -EINVAL on a bad
     argument or a range leaving the user address space, the removal (with
     its unmap effect) on an exact recorded mapping, the no-op 0 on a free
-    range below the stack band, and `Unmodeled` (fail closed) on a partial
-    unmap, one touching the image, or a free range reaching into the band
-    (see `Mmap.munmap_spec`). -/
+    range below the stack band, the cut (with its unmap effect) on a
+    partial unmap below the band, and `Unmodeled` (fail closed) on a range
+    touching the image or reaching into the band (see `Mmap.munmap_spec`). -/
 def munmap_witness (addr len : word) (m : Model) : Outcome SyscallEffect Model event :=
   if !(((addr.toNat : Int) % page_size) == 0) || w_is0 len then
     ret_outcome (errno_ret EINVAL) m
@@ -442,6 +442,10 @@ def munmap_witness (addr len : word) (m : Model) : Outcome SyscallEffect Model e
                 (m_vmmaps m).vm_init_sp) m) []
       else if munmap_free_ok (m_vmmaps m) addr nZ then
         ret_outcome (BitVec.ofInt 64 0) m
+      else if munmap_cut_ok (m_vmmaps m) addr nZ then
+        .ok (SyscallEffect.mkEffectU (BitVec.ofInt 64 0) [] [] [(addr, n)] [] [])
+           (with_mmap_destroyed addr n
+              (mmap_fixed_destroyed_next (m_vmmaps m) addr n) m) []
       else .unmodeled
 
 theorem munmap_witness_ok (addr len : word) (i : SyscallInput) (m : Model) :
@@ -478,7 +482,18 @@ theorem munmap_witness_ok (addr len : word) (i : SyscallInput) (m : Model) :
         · repeat rw [ite_eq_left hfree]
           exact pure_ok _ i m
         · repeat rw [ite_eq_right hfree]
-          exact unmodeled_intro i m
+          by_cases hcut : munmap_cut_ok (m_vmmaps m) addr
+              (page_round_up_Z (len.toNat : Int)) = true
+          · repeat rw [ite_eq_left hcut]
+            exact alt_r _ _ i m _
+              (bind_step (modify fun _ =>
+                  with_mmap_destroyed addr n
+                    (mmap_fixed_destroyed_next (m_vmmaps m) addr n) m)
+                (fun _ => pure (SyscallEffect.mkEffectU (BitVec.ofInt 64 0) [] []
+                  [(addr, n)] [] []))
+                i m () _ _ (modify_ok _ i m) (pure_ok _ i _))
+          · repeat rw [ite_eq_right hcut]
+            exact unmodeled_intro i m
 
 /- (** mremap witness: deterministic -EINVAL for the modeled flag shape's
        misaligned address and zero/wrapping new size, [Unmodeled] for
