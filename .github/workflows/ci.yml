@@ -10,14 +10,65 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install elan (pinned by lean-toolchain)
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
-            | sh -s -- -y --default-toolchain none
-          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+      # Installs elan (pinned by `lean-toolchain`) and caches the toolchain and
+      # `.lake` between runs.  The BUILD is left to `scripts/check.sh`, which
+      # is also the hygiene/audit/decoder gate; `build: false` avoids building
+      # twice.
+      - uses: leanprover/lean-action@v1
+        with:
+          build: false
+          test: false
+          lint: false
 
       - name: Build library and run conformance checks
         run: ./scripts/check.sh
 
       - name: Build decoder CLI
         run: lake build decoder
+
+  # The `build` job also checks the binaries → Lean direction: RwxFlagNs is in
+  # the root module, so `scripts/check.sh`'s `lake build` runs `embedElf%` over
+  # the committed ELFs and typechecks the proof stated about those images.
+  # This job checks the other direction — sources → committed binaries.
+  e2e:
+    name: e2e (sources to committed ELF images)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The C side of the example is built by the real GNU musl cross compiler,
+      # taken from nixpkgs (shell.nix does the same for a local checkout); the
+      # script has no fallback to another compiler.
+      #
+      # The nixpkgs REVISION is pinned, and the derivation is fetched with
+      # `--option max-jobs 0`, for a practical reason measured here: nixpkgs'
+      # `pkgsCross.riscv64-musl` is only *sometimes* in cache.nixos.org (the
+      # current nixos-unstable tip and nixos-25.05 are not), and a miss means
+      # nix BUILDS GCC from source — a >35-minute job.  This revision is the one
+      # `shell.nix` resolves locally, it is cached, and `max-jobs 0` turns any
+      # future cache miss into a fast, explicit failure instead of a hang.
+      - name: Install nix
+        uses: cachix/install-nix-action@v31
+
+      # Rebuilds both programs from source and compares each with its committed
+      # ELF at the loader level (tools/e2e/compare_elfs.py): segment extents and
+      # permissions, entry point, derived AT_PHDR, and the bytes each PT_LOAD
+      # takes from the file.  Layout drift fails for both sides; the target's
+      # program bytes are also required to match (the section header table is
+      # masked: the loader never reads it).  The source's program bytes are
+      # reported but not gated here: its committed binary is one specific GNU
+      # musl build, and the pinned cross GCC (15.2.0, binutils 2.44) was
+      # measured to produce a different PROGRAM (25 of 229 file-extent bytes,
+      # code included), so a warning is the correct outcome.  A `--strict-bytes`
+      # run on a host with the exact compiler is the byte-level gate.
+      # Both compilers come from ONE pinned nixpkgs revision via `shell.nix`:
+      # `pkgsCross.riscv64-musl` for the C side and `pkgs.zig` (0.15.2) for the
+      # target.  `-I nixpkgs=<pinned archive>` fixes the revision, and
+      # `--option max-jobs 0` turns a cache miss into a fast failure instead of
+      # a GCC/zig source build.
+      - name: Rebuild and compare the committed ELF images
+        env:
+          NIXPKGS: https://github.com/NixOS/nixpkgs/archive/c0f3d81a7ddbc2b1332be0d8481a672b4f6004d6.tar.gz
+        run: |
+          nix-shell -I "nixpkgs=$NIXPKGS" --option max-jobs 0 \
+            --run 'zig version; bash tools/e2e/rwx_flag_ns.sh' 
