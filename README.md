@@ -1,6 +1,6 @@
 # Lean 4 Linux process semantics
 
-Ported from [theorem-labs/rocq-linux-process-semantics#f1006fe](https://github.com/theorem-labs/rocq-linux-process-semantics/tree/f1006fe)
+Ported from [theorem-labs/rocq-linux-process-semantics#68ccc39](https://github.com/theorem-labs/rocq-linux-process-semantics/tree/68ccc39).
 
 A Lean 4 formalisation of the Linux process model and the syscall surface a
 process actually observes: a RISC-V machine model, an executable specification of
@@ -49,6 +49,13 @@ first column is the name `scripts/AxiomAudit.lean` pins.
 | `abrt_refutes_error_free_abort` | a concrete image whose run dies by SIGABRT, firing the error-free abort refutation rather than merely stating it; `abrt_dies_by_signal` discharges the premise at every limit. | `Checks/AbortWitness.lean` |
 | `exits_c_must_exit_at`, `exit0_image_must_exit_zero` | a successful `exits_c` walk forces an exit — for the concrete exit-0 image the walk is closed by `decide`. | `Checks/Examples.lean` |
 | `check_sound` | the ASan plan checker is sound against the abstract semantics, over a concrete `LIMIT` kept as an explicit parameter. | `Common/AsanPlanSound.lean` |
+| `check_syscall_preserves_vm_fit` → `syscall_spec_preserves_vm_fit` | every accepted syscall keeps `vm_fit`: no live mapping's end wraps past 2^64. Not implied by `vm_wf` — an entry `(2^64 - 4096, 8192)` satisfies that and not this. | `Checks/MapsFit.lean` |
+| `star_preserves_sys_inv`, `sys_inv_noaccess_pages_owned` | the protected ledger's invariant (`sys_inv` = `vm_wf` ∧ `vm_fit` ∧ `na_inv`) holds of `init_model`, every step keeps it, and it yields `State.noaccess_pages_owned` — the hypothesis `mremap_fresh_avoids_noaccess` used to take. `na_inv` is the strengthening that makes it inductive: the plain property fails on an unreachable `brk`-orphan state. | `Checks/NoaccessOwned/` |
+| `mremap_budget_refused_iff`, `mremap_budget_refused_is_refusal_sys_inv` | the mremap budget mark fires exactly when no placement fits in-place or by moving, and on a state keeping the ledger invariants a marked request has no non-errno resolution. | `Checks/BudgetPremise.lean`, `Checks/BudgetPremiseMremap.lean` |
+| `check_munmap_unmap_backing`, `check_munmap_zero_owned` | every unmapping answer cuts the backing ledgers by the range, and a `0` answer outside the exact arm leaves exactly the bytes and pages outside it. | `Checks/MunmapCut.lean` |
+| `mm_ok_step`, `mm_ok_no_accesses` | a successful `mmap`, `mremap` or `brk` keeps the run going, is killed by nothing, and touches no user memory. | `Checks/MmStepFrame.lean` |
+| `mm_refutes_budgets_only`, `cm_run_budget_only_refused` | the finer budget premise — which does not excuse a request whose charge alone exceeds the whole budget — is refutable on a run, and the cumulative refusal is still excluded. | `Checks/OversizeReachable.lean` |
+| `sv48_band_is_linux_set`, `sv39_band_is_linux_set` | the mmap-base band `[mmap_base_min, mmap_base_max]` is EXACTLY the set of bases Linux gives, under two named assumptions, with examples showing each is needed. | `Checks/Cases/MmapBase.lean` |
 | `gate_exit0_accepts`, `gate_exit1_rejects` | the accept/reject gate is decided on both demo verdicts. | `Checks/GatedSize.lean` |
 | `DemoSealed`, `omni_strong_universal` | the worked demonstrations' sealed specifications (a full `SPEC_PATCH_CLASSIFY` instance, so the classifier surface is inhabited), and proofs that their images meet them. | `Examples/` |
 
