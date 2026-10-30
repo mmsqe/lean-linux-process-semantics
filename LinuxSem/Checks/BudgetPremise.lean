@@ -22,13 +22,13 @@
     SOUNDNESS lemmas at abstract arguments: where the mark fires,
     every outcome the arm admits is a refusal (`Run.refusal_b`) — for
     `brk`, `mmap` and `mprotect` over the whole arm; for `mremap` the
-    in-place resolution, under the hypothesis that the grown range
-    carries no backing metadata but the source's own, the moved one
-    being admitted on a state where the mark fires (the mark's header
-    in `Sys/Mm/Mremap` says why that is the safe direction).  Beside
-    it, the COMPLETENESS lemmas the two-gate rule of that header
-    promises: each of a grow's budget gates, the in-place post-state's
-    and the move's at any fresh destination, fires the mark.
+    in-place resolution on every state, and the moved one at every
+    destination that carries no backing metadata (the mark's header in
+    `Sys/Mm/Mremap` gives the rule).  Beside it, the COMPLETENESS
+    lemma: in-place growth not admitted and the move's gate refusing at
+    a fresh destination that carries no backing metadata fires the mark;
+    and the lemma that the mark is weaker than the earlier two-gate mark,
+    which this module keeps only to pin that direction.
   - PART 2, the two first-touch clauses.  A store into a lazy page
     with the budget spent IS budget-refused and is an `SError`
     transition; the same store with a page of budget left is not; and
@@ -69,10 +69,11 @@
 
   - PART 1: the three budget marks' fixtures and every `decide` pin
     beside them, including the `region_free`/page-rounding proof kit and
-    both directions of the two-gate approximation (`ov_*`, `un_*`,
-    `un_inplace_gate_passes`); `mremap_budget_refused_fires_on_inplace_refusal`,
-    `mremap_budget_refused_refuses_move` and
-    `mremap_budget_refused_refuses_inplace`; the mprotect pins and
+    the two charge orders of the mark (`ov_*` with
+    `ov_two_gate_fires_where_the_mark_is_silent`, `un_*`,
+    `un_inplace_gate_passes`); `mremap_budget_refused_iff`,
+    `.inv`, `.refuses_inplace`, `.refuses_move`,
+    `.fires_on_move_refusal` and `.implies_two_gate`; the mprotect pins and
     `mprotect_dispatch`; `mmap_overflowing_len_is_not_budget_refused`
     (the -ENOMEM an ARGUMENT GATE determines, over
     `Checks.SpuriousCfg.mmap_overflow_i`); and the three whole-arm
@@ -686,25 +687,52 @@ def mremap_two_page_model (lim : Int) : Model :=
 theorem mremap_shrink_is_not_budget_refused :
     alloc_budget_refused_b (mremap_in 8192 4096) (mremap_two_page_model 8192) = false := by decide
 
-/-- BOTH DIRECTIONS OF THE APPROXIMATION, each on a reachable state.
-    The mark tests both of a grow's budget gates — the in-place
-    post-state's and the move's, the latter through
-    `Mremap.mremap_move_budget_b` — because the two charges are ordered
-    neither way on every state; the header of `Sys/Mm/Mremap` carries
-    the argument, and the two states below pin one direction each.
+/-- THE MARK IS EXACT ON BOTH CHARGE ORDERS, each on a reachable state.
+    The mark fires when no placement fits: in-place growth is not
+    admitted AND the move's budget gate,
+    `Mremap.mremap_move_budget_b`, refuses.  The two charges are ordered
+    neither way on every state; the header of `Sys/Mm/Mremap` carries the
+    argument, and the two states below pin one order each.
 
-    OVER: an eager page-sized source at 0x10000, a MAP_NORESERVE
-    neighbour at 0x11000 with its first page touched, and a budget the
-    pre-state half fills.  A grow of the source over the neighbour's
-    first page: the mark fires, because the in-place post-state would
-    clear the neighbour's lazy metadata under the tail and charge it
-    eagerly, past the budget; the in-place resolution is not even
-    available (the tail is occupied); and a move to a free destination
-    FITS, exactly at the budget.  Linux moves and
-    succeeds; the premise excludes the input anyway.  Over-approximation,
-    the safe direction — and pinned so that a later change cannot
-    restate the mark on the move's gate alone and silently turn it into
-    an under-approximation. -/
+    The earlier mark fired when EITHER gate refused.  It is kept here,
+    as `mremap_budget_refused_two_gate_b`, only to pin that the present
+    mark is strictly weaker: it implies the earlier one
+    (`mremap_budget_refused_implies_two_gate`, below) and is silent on
+    `ov_model`, where the earlier one fired.
+
+    That def is the shape `Sys/Mm/Mremap`'s mark had before the sync, so
+    it omits the `State.TASK_SIZE` gate the mark also carries today: the
+    implication below does not need it, and the pin is about the budget
+    rule alone, not about the argument gates. -/
+def mremap_budget_refused_two_gate_b (old old_size new_size flags : word)
+    (m : Model) : Bool :=
+  if !((flags.toNat : Int) == MREMAP_MAYMOVE) then false
+  else if !(((old.toNat : Int) % page_size) == 0) then false
+  else if page_align_is0_b new_size then false
+  else if page_align_is0_b old_size then false
+  else
+    let h := m_vmmaps m
+    let old_nZ := page_round_up_Z (old_size.toNat : Int)
+    let new_nZ := page_round_up_Z (new_size.toNat : Int)
+    let old_n := BitVec.ofInt 64 old_nZ
+    let new_n := BitVec.ofInt 64 new_nZ
+    if !(mremap_source_b h old old_n old_nZ &&
+         mremap_backing_uniform_b m old old_n)
+    then false
+    else if new_nZ ≤ old_nZ then false
+    else !(mremap_final_budget_b m old old_n old new_n &&
+           mremap_move_budget_b m old old_n new_n)
+
+/-- IN-PLACE CHARGED MORE: an eager page-sized source at 0x10000, a
+    MAP_NORESERVE neighbour at 0x11000 with its first page touched, and
+    a budget the pre-state half fills.  A grow of the source over the
+    neighbour's first page: the in-place post-state would clear the
+    neighbour's lazy metadata under the tail and charge it eagerly, past
+    the budget; the in-place resolution is not available anyway (the
+    tail is occupied); and a move to a free destination FITS, exactly at
+    the budget.  Linux moves and succeeds, and the mark is silent.  The
+    earlier two-gate mark fired here and dropped the input from every
+    budget premise. -/
 def ov_model : Model :=
   with_vm_backing [(BitVec.ofInt 64 0x11000, BitVec.ofInt 64 8192)]
     [BitVec.ofInt 64 0x11000]
@@ -713,10 +741,17 @@ def ov_model : Model :=
 
 theorem ov_pre_state_within_budget : vm_backing_within_limit ov_model = true := by decide
 
-theorem ov_mark_fires_while_a_move_fits :
-    mremap_budget_refused_b 0x10000 4096 12288 1 ov_model = true
+theorem ov_mark_silent_while_a_move_fits :
+    mremap_budget_refused_b 0x10000 4096 12288 1 ov_model = false
     ∧ mremap_inplace_grow_b ov_model 0x10000 4096 12288 4096 12288 = false
     ∧ mremap_fresh_b ov_model 4096 12288 0x10000 4096 0x100000 12288 = true := by
+  decide
+
+/-- …where the earlier two-gate mark fired.  The change is one-directional:
+    see `mremap_budget_refused_implies_two_gate`. -/
+theorem ov_two_gate_fires_where_the_mark_is_silent :
+    mremap_budget_refused_two_gate_b 0x10000 4096 12288 1 ov_model = true
+    ∧ mremap_budget_refused_b 0x10000 4096 12288 1 ov_model = false := by
   decide
 
 /-- The charges behind it: the in-place post-state is over the budget,
@@ -728,7 +763,7 @@ theorem ov_charges :
     ∧ mremap_move_charge ov_model 0x10000 4096 12288 = 16384 := by
   decide
 
-/-- UNDER: an eager page-sized source at
+/-- IN-PLACE CHARGED LESS: an eager page-sized source at
     0x10000 and a PROT_NONE mapping directly above it at 0x11000 —
     recorded in `vm_maps` AND `vm_noaccess`, as the NULL-hint PROT_NONE
     arm of `Mmap.mmap_spec` records it, so the state is a pair of
@@ -743,8 +778,8 @@ theorem ov_charges :
     whole grown mapping at a fresh destination and is charged every byte
     of it, over the budget, at every such destination: the only
     non-errno resolution is budget-refused.
-    The mark fires, because it tests the move's gate as well.  A mark
-    that read the in-place gate alone would not, and
+    The mark fires: in-place growth is not admitted and the move's gate
+    refuses.  A mark that read the in-place gate alone would not, and
     `Run.source_within_budget` would hold of an input whose source is
     refused. -/
 def un_model : Model :=
@@ -810,16 +845,210 @@ theorem mremap_model_next_limit (m : Model) (old old_n dst new_n : word) :
     (m_vmmaps (mremap_model_next m old old_n dst new_n)).vm_limit
       = (m_vmmaps m).vm_limit := rfl
 
-/-- THE TWO-GATE RULE, abstract.  Each of a grow's budget gates fires
-    the mark: the in-place post-state's, with no side condition, and
-    the move's at any fresh destination that carries no backing
-    metadata, through `Mremap.mremap_move_charge_at_fresh`.  The
-    hypotheses of both are the mark's own argument gates, passed. -/
-theorem mremap_budget_refused_fires_on_inplace_refusal
-    (old old_size new_size flags : word) (m : Model)
+/-- THE RULE, abstract.  On a grow past the mark's own argument gates,
+    the mark is exactly "in-place growth not admitted and the move's
+    budget gate refusing". -/
+theorem mremap_budget_refused_iff (old old_size new_size flags : word) (m : Model)
     (Hflags : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
     (Halign : ((old.toNat : Int) % page_size == 0) = true)
     (Hnew : page_align_is0_b new_size = false)
+    (Htask : ¬((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)))
+    (Hold : page_align_is0_b old_size = false)
+    (Hsrc : (mremap_source_b (m_vmmaps m) old
+               (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+               (page_round_up_Z (old_size.toNat : Int))
+             && mremap_backing_uniform_b m old
+                  (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = true)
+    (Hgrow : page_round_up_Z (old_size.toNat : Int)
+               < page_round_up_Z (new_size.toNat : Int)) :
+    mremap_budget_refused_b old old_size new_size flags m
+    = !(mremap_inplace_grow_b m old
+          (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+          (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))
+          (page_round_up_Z (old_size.toNat : Int))
+          (page_round_up_Z (new_size.toNat : Int))
+        || mremap_move_budget_b m old
+             (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+             (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))) := by
+  unfold mremap_budget_refused_b
+  dsimp only
+  rw [ite_eq_right (by simp [Hflags]), ite_eq_right (by simp [Halign]),
+      ite_eq_right (by simp [Hnew]), ite_eq_right (by simp [Htask]),
+      ite_eq_right (by simp [Hold]), ite_eq_right (by simp [Hsrc])]
+  rw [ite_eq_right (by omega)]
+
+/-- What a mark that fires says: every argument gate passed, the request
+    grows, in-place growth is not admitted and the move's budget gate
+    refuses.  The nine conjuncts are the mark's own definition read
+    back, in the order the definition tests them. -/
+theorem mremap_budget_refused_inv (old old_size new_size flags : word) (m : Model)
+    (H : mremap_budget_refused_b old old_size new_size flags m = true) :
+    ((flags.toNat : Int) == MREMAP_MAYMOVE) = true
+    ∧ ((old.toNat : Int) % page_size == 0) = true
+    ∧ page_align_is0_b new_size = false
+    ∧ ¬((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int))
+    ∧ page_align_is0_b old_size = false
+    ∧ (mremap_source_b (m_vmmaps m) old
+         (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+         (page_round_up_Z (old_size.toNat : Int))
+       && mremap_backing_uniform_b m old
+            (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = true
+    ∧ page_round_up_Z (old_size.toNat : Int) < page_round_up_Z (new_size.toNat : Int)
+    ∧ mremap_inplace_grow_b m old
+        (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+        (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))
+        (page_round_up_Z (old_size.toNat : Int))
+        (page_round_up_Z (new_size.toNat : Int)) = false
+    ∧ mremap_move_budget_b m old
+        (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+        (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = false := by
+  unfold mremap_budget_refused_b at H
+  dsimp only at H
+  by_cases h1 : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true
+  · rw [ite_eq_right (by simp [h1])] at H
+    by_cases h2 : ((old.toNat : Int) % page_size == 0) = true
+    · rw [ite_eq_right (by simp [h2])] at H
+      by_cases h3 : page_align_is0_b new_size = false
+      · rw [ite_eq_right (by simp [h3])] at H
+        by_cases h3b : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · rw [ite_eq_left h3b] at H
+          simp at H
+        · rw [ite_eq_right h3b] at H
+          by_cases h4 : page_align_is0_b old_size = false
+          · rw [ite_eq_right (by simp [h4])] at H
+            by_cases h5 : (mremap_source_b (m_vmmaps m) old
+                             (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+                             (page_round_up_Z (old_size.toNat : Int))
+                           && mremap_backing_uniform_b m old
+                                (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = true
+            · rw [ite_eq_right (by rw [h5]; simp)] at H
+              by_cases h6 : page_round_up_Z (new_size.toNat : Int)
+                            ≤ page_round_up_Z (old_size.toNat : Int)
+              · rw [ite_eq_left (by simp [h6])] at H
+                simp at H
+              · rw [ite_eq_right (by simp [h6])] at H
+                rw [Bool.not_eq_true'] at H
+                obtain ⟨hip, hmv⟩ := Bool.or_eq_false_iff.mp H
+                exact ⟨h1, h2, h3, h3b, h4, h5, by omega, hip, hmv⟩
+            · rw [ite_eq_left (by simp [h5])] at H
+              simp at H
+          · rw [ite_eq_left (by simp [h4])] at H
+            simp at H
+      · rw [ite_eq_left (by simp [h3])] at H
+        simp at H
+    · rw [ite_eq_left (by simp [h2])] at H
+      simp at H
+  · rw [ite_eq_left (by simp [h1])] at H
+    simp at H
+
+/-- SOUNDNESS for the in-place resolution: where the mark fires,
+    `Mremap.mremap_inplace_grow_b` is `false`.  The mark reads the
+    in-place admission directly, so this needs no ledger hypothesis —
+    the difference from the pre-sync statement, which had to route the
+    in-place charge through the move's. -/
+theorem mremap_budget_refused_refuses_inplace (old old_size new_size flags : word) (m : Model)
+    (Hmark : mremap_budget_refused_b old old_size new_size flags m = true) :
+    mremap_inplace_grow_b m old
+      (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+      (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))
+      (page_round_up_Z (old_size.toNat : Int))
+      (page_round_up_Z (new_size.toNat : Int)) = false := by
+  obtain ⟨-, -, -, -, -, -, -, hip, -⟩ :=
+    mremap_budget_refused_inv old old_size new_size flags m Hmark
+  exact hip
+
+/-- The bridge `Mremap.mremap_move_charge_at_fresh` gives, written as an
+    equation between the two gates: at a destination the move's charge is
+    invariant over, the destination-free gate and the in-place
+    post-state's gate are the same `decide`. -/
+private theorem mremap_move_budget_eq_final (m : Model) (old old_n dst new_n : word)
+    (hch : vm_backing_used (mremap_model_next m old old_n dst new_n)
+      = mremap_move_charge m old old_n new_n) :
+    mremap_move_budget_b m old old_n new_n
+    = mremap_final_budget_b m old old_n dst new_n := by
+  unfold mremap_move_budget_b mremap_final_budget_b vm_backing_within_limit
+  rw [mremap_model_next_limit, hch]
+
+/-- SOUNDNESS for the moved resolution: where the mark fires, no fresh
+    destination that carries no backing metadata is admitted by
+    `Mremap.mremap_fresh_b` — its budget conjunct reads, at such a
+    destination, the charge `Mremap.mremap_move_budget_b` refused
+    (`Mremap.mremap_move_charge_at_fresh`).  The metadata hypotheses are
+    instances, at `dst`, of the ledger invariants named in
+    `Sys/Mm/Mremap`'s charge header (`State.noaccess_pages_owned` and
+    the reservation-under-live-mapping invariant of the lazy ledgers).
+    With `mremap_budget_refused_refuses_inplace`: a marked request has
+    no non-errno resolution on a state keeping them. -/
+theorem mremap_budget_refused_refuses_move (old old_size new_size flags : word) (m : Model) (dst : word)
+    (Hfit : ∀ (a sz : word), (a, sz) ∈ map_remove (m_vmmaps m).vm_maps old →
+      (a.toNat : Int) + (sz.toNat : Int) ≤ two_pow_64)
+    (Hnoacc : region_free (m_vmmaps m).vm_noaccess dst (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = true)
+    (Hlazy : maps_subtract
+        (maps_subtract (m_vm_lazy m) (old.toNat : Int)
+          ((old.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat))
+        (dst.toNat : Int) ((dst.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))).toNat)
+      = maps_subtract (m_vm_lazy m) (old.toNat : Int)
+          ((old.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat))
+    (Hpages : List.filter (page_outside_range (dst.toNat : Int)
+          ((dst.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))).toNat))
+        (List.filter (page_outside_range (old.toNat : Int)
+          ((old.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat)) (m_vm_materialized m))
+      = List.filter (page_outside_range (old.toNat : Int)
+          ((old.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat)) (m_vm_materialized m))
+    (Hmark : mremap_budget_refused_b old old_size new_size flags m = true) :
+    mremap_fresh_b m
+      (page_round_up_Z (old_size.toNat : Int))
+      (page_round_up_Z (new_size.toNat : Int)) old
+      (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) dst
+      (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = false := by
+  let ON : word := BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))
+  let NN : word := BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))
+  obtain ⟨-, -, Hnew, -, -, -, Hgrow, -, Hmv⟩ :=
+    mremap_budget_refused_inv old old_size new_size flags m Hmark
+  have hNNn : NN.toNat = page_round_up_Z (new_size.toNat : Int) :=
+    page_align_is0_b_false_word new_size Hnew
+  cases hf : mremap_fresh_b m
+      (page_round_up_Z (old_size.toNat : Int))
+      (page_round_up_Z (new_size.toNat : Int)) old
+      (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) dst
+      (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) with
+  | false => rfl
+  | true =>
+    exfalso
+    unfold mremap_fresh_b at hf
+    dsimp only at hf
+    simp only [Bool.and_eq_true] at hf
+    obtain ⟨⟨⟨⟨⟨-, Hdalign⟩, -⟩, Hdtop⟩, Hdfree⟩, Hgate⟩ := hf
+    rw [decide_eq_true_eq] at Hdalign
+    rw [decide_eq_true_eq] at Hdtop
+    have hold_nn : (0 : Int) ≤ page_round_up_Z (old_size.toNat : Int) :=
+      page_round_up_Z_nonneg _ (by omega)
+    have hpos : (0 : Int) < (NN.toNat : Int) := by rw [hNNn]; omega
+    have hend : (dst.toNat : Int) + (NN.toNat : Int) < two_pow_64 := by
+      rw [hNNn]
+      have := alloc_top_lt (m_vmmaps m)
+      omega
+    have hmaps : region_free (map_remove (m_vmmaps m).vm_maps old) dst NN = true :=
+      region_free_map_remove (m_vmmaps m).vm_maps old dst NN
+        (region_free_app_r _ _ dst NN Hdfree)
+    have hch := mremap_move_charge_at_fresh m old ON dst NN
+      Hdalign (by rw [hNNn]; exact page_round_up_Z_mod _) hpos hend Hfit hmaps
+      Hnoacc Hlazy Hpages
+    rw [mremap_move_budget_eq_final m old ON dst NN hch] at Hmv
+    rw [Hmv] at Hgate
+    exact absurd Hgate (by simp)
+
+/-- COMPLETENESS against the move: in-place growth not admitted and the
+    move's gate refusing at one fresh destination that carries no
+    backing metadata fires the mark.  The hypotheses are the mark's
+    argument gates, the in-place refusal, and the metadata hypotheses of
+    `mremap_budget_refused_refuses_move`. -/
+theorem mremap_budget_refused_fires_on_move_refusal
+    (old old_size new_size flags : word) (m : Model) (dst : word)
+    (Hflags : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
+    (Halign : ((old.toNat : Int) % page_size == 0) = true)
+    (Hnew : page_align_is0_b new_size = false)
+    (Htask : ¬((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)))
     (Hold : page_align_is0_b old_size = false)
     (Hsrc : (mremap_source_b (m_vmmaps m) old
                (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
@@ -828,34 +1057,11 @@ theorem mremap_budget_refused_fires_on_inplace_refusal
                   (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = true)
     (Hgrow : page_round_up_Z (old_size.toNat : Int)
                < page_round_up_Z (new_size.toNat : Int))
-    (Hgate : mremap_final_budget_b m old
-               (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) old
-               (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = false) :
-    mremap_budget_refused_b old old_size new_size flags m = true := by
-  unfold mremap_budget_refused_b
-  dsimp only
-  rw [ite_eq_right (by simp [Hflags]), ite_eq_right (by simp [Halign]),
-      ite_eq_right (by simp [Hnew]), ite_eq_right (by simp [Hold]),
-      ite_eq_right (by simp [Hsrc])]
-  rw [ite_eq_right (by omega)]
-  simp [Hgate]
-
-/-- COMPLETENESS for the move, abstract: a grow whose move gate refuses
-    at a fresh destination fires the mark.  `mremap_move_charge_at_fresh`
-    reads the move's charge off the in-place post-state's ledger
-    arithmetic, so the mark's `mremap_move_budget_b` conjunct is the
-    same `decide` as the `mremap_final_budget_b` the hypothesis refuses
-    — which is what lets a caller that has already resolved the move
-    conclude the budget declined it. -/
-theorem mremap_budget_refused_refuses_move (old old_size new_size flags : word) (m : Model) (dst : word)
-    (Hflags : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
-    (Halign : ((old.toNat : Int) % page_size == 0) = true)
-    (Hnew : page_align_is0_b new_size = false)
-    (Hold : page_align_is0_b old_size = false)
-    (Hsrc : (mremap_source_b (m_vmmaps m) old (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-               (page_round_up_Z (old_size.toNat : Int))
-             && mremap_backing_uniform_b m old (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = true)
-    (Hgrow : page_round_up_Z (old_size.toNat : Int) < page_round_up_Z (new_size.toNat : Int))
+    (Hip : mremap_inplace_grow_b m old
+             (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+             (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))
+             (page_round_up_Z (old_size.toNat : Int))
+             (page_round_up_Z (new_size.toNat : Int)) = false)
     (Hdalign : (dst.toNat : Int) % page_size = 0)
     (Hdtop : (dst.toNat : Int) + page_round_up_Z (new_size.toNat : Int)
                ≤ alloc_top (m_vmmaps m))
@@ -876,14 +1082,20 @@ theorem mremap_budget_refused_refuses_move (old old_size new_size flags : word) 
           ((old.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat)) (m_vm_materialized m))
       = List.filter (page_outside_range (old.toNat : Int)
           ((old.toNat : Int) + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat)) (m_vm_materialized m))
-    (Hgate : mremap_final_budget_b m old (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) dst (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = false) :
+    (Hgate : mremap_final_budget_b m old
+               (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) dst
+               (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = false) :
     mremap_budget_refused_b old old_size new_size flags m = true := by
-  let ON : word := (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-  let NN : word := (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))
+  let ON : word := BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))
+  let NN : word := BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))
+  rw [mremap_budget_refused_iff old old_size new_size flags m
+        Hflags Halign Hnew Htask Hold Hsrc Hgrow]
+  rw [Hip]
+  simp only [Bool.false_or]
   have hNNn : NN.toNat = page_round_up_Z (new_size.toNat : Int) :=
     page_align_is0_b_false_word new_size Hnew
-  have hbase : (0 : Int) ≤ page_round_up_Z (old_size.toNat : Int) :=
-    page_round_up_Z_nonneg _ (bv_unsigned_range_u64 old_size).1
+  have hold_nn : (0 : Int) ≤ page_round_up_Z (old_size.toNat : Int) :=
+    page_round_up_Z_nonneg _ (by omega)
   have hpos : (0 : Int) < (NN.toNat : Int) := by rw [hNNn]; omega
   have hend : (dst.toNat : Int) + (NN.toNat : Int) < two_pow_64 := by
     rw [hNNn]
@@ -892,171 +1104,31 @@ theorem mremap_budget_refused_refuses_move (old old_size new_size flags : word) 
   have hmaps : region_free (map_remove (m_vmmaps m).vm_maps old) dst NN = true :=
     region_free_map_remove (m_vmmaps m).vm_maps old dst NN
       (region_free_app_r _ _ dst NN Hdfree)
+  have hch := mremap_move_charge_at_fresh m old ON dst NN
+    Hdalign (by rw [hNNn]; exact page_round_up_Z_mod _) hpos hend Hfit hmaps
+    Hnoacc Hlazy Hpages
   have hfalse : mremap_move_budget_b m old ON NN = false := by
-    have hch := mremap_move_charge_at_fresh m old ON dst NN
-      Hdalign (by rw [hNNn]; exact page_round_up_Z_mod _) hpos hend Hfit hmaps
-      Hnoacc Hlazy Hpages
-    unfold mremap_move_budget_b
-    unfold mremap_final_budget_b vm_backing_within_limit at Hgate
-    rw [← hch]
+    rw [mremap_move_budget_eq_final m old ON dst NN hch]
     exact Hgate
-  unfold mremap_budget_refused_b
-  dsimp only
-  rw [ite_eq_right (by simp [Hflags]), ite_eq_right (by simp [Halign]),
-      ite_eq_right (by simp [Hnew]), ite_eq_right (by simp [Hold]),
-      ite_eq_right (by rw [Hsrc]; simp), ite_eq_right (by omega)]
   rw [hfalse]
-  simp
+  rfl
 
-/-- SOUNDNESS for the in-place resolution, abstract, kept from the
-    one-gate mark: where the mark fires, `Mremap.mremap_inplace_grow_b`
-    is `false`.  Under the two-gate mark the proof goes through the
-    grown range `[old, old+new_n)` carrying no backing metadata but the
-    source's own — the metadata hypotheses of
-    `mremap_budget_refused_refuses_move`, at `dst = old` — because then
-    the two post-states are charged alike
-    (`Mremap.mremap_move_charge_at_fresh` at the source's own address),
-    so a mark that fires is an in-place gate that refuses.
-
-    THE HYPOTHESES ARE NOT A RESTRICTION OF THE LEMMA.  Each is an
-    instance, at the grown range, of a ledger invariant every reachable
-    state satisfies: the protected half is `State.noaccess_pages_owned`
-    (every protected byte lies on a page some live mapping touches —
-    stated in `State`'s purpose (c), checked on the brk-orphan state by
-    `Checks/Cases/Mm/Mmap`'s `noaccess_pages_owned_brk_orphan`, and the
-    hypothesis `Mremap.mremap_fresh_avoids_noaccess` already consumes),
-    together with `Mremap.mremap_source_b`'s own freeness of the source;
-    the lazy and materialized halves are the reservation-under-live-
-    mapping invariant of `vm_lazy` and `vm_materialized` that
-    `Sys/Mm/Mremap`'s charge header names, which the tree states in
-    prose but has not yet proved preserved.  A free tail (the in-place
-    region_free conjunct) therefore carries none of them on a
-    reachable state, and the hypotheses hold.  The state on which the
-    hypothesis-free statement fails — a protected page above the
-    source that no live mapping touches, so the in-place post-state is
-    cheaper than a move and the mark fires on the move's refusal while
-    in-place growth is admitted — violates `noaccess_pages_owned` and is
-    unreachable.  Discharging the protected half from the invariant, as
-    `mremap_fresh_avoids_noaccess` does for a moved destination, is a
-    follow-up. -/
-theorem mremap_budget_refused_refuses_inplace (old old_size new_size flags : word) (m : Model)
-    (Hfit : ∀ (a sz : word), (a, sz) ∈ map_remove (m_vmmaps m).vm_maps old →
-      (a.toNat : Int) + (sz.toNat : Int) ≤ two_pow_64)
-    (Hnoacc : region_free (m_vmmaps m).vm_noaccess old
-      (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))) = true)
-    (Hlazy : maps_subtract
-        (maps_subtract (m_vm_lazy m) (old.toNat : Int)
-          ((old.toNat : Int)
-           + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat))
-        (old.toNat : Int)
-        ((old.toNat : Int)
-         + (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))).toNat)
-      = maps_subtract (m_vm_lazy m) (old.toNat : Int)
-          ((old.toNat : Int)
-           + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat))
-    (Hpages : List.filter (page_outside_range (old.toNat : Int)
-          ((old.toNat : Int)
-           + (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))).toNat))
-        (List.filter (page_outside_range (old.toNat : Int)
-          ((old.toNat : Int)
-           + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat))
-          (m_vm_materialized m))
-      = List.filter (page_outside_range (old.toNat : Int)
-          ((old.toNat : Int)
-           + (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))).toNat))
-          (m_vm_materialized m))
+/-- THE DIRECTION OF THE CHANGE: the mark implies the earlier two-gate
+    mark, so every input a budget premise kept under the earlier mark it
+    keeps now, and `ov_two_gate_fires_where_the_mark_is_silent` shows the
+    converse fails.  The present mark is the weaker one. -/
+theorem mremap_budget_refused_implies_two_gate (old old_size new_size flags : word) (m : Model)
     (Hmark : mremap_budget_refused_b old old_size new_size flags m = true) :
-    mremap_inplace_grow_b m old
-      (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-      (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))
-      (page_round_up_Z (old_size.toNat : Int))
-      (page_round_up_Z (new_size.toNat : Int)) = false := by
-  let ON : word := BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))
-  let NN : word := BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int))
-  unfold mremap_budget_refused_b at Hmark
-  dsimp only at Hmark
-  by_cases h1 : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true
-  · rw [ite_eq_right (by simp [h1])] at Hmark
-    by_cases h2 : ((old.toNat : Int) % page_size == 0) = true
-    · rw [ite_eq_right (by simp [h2])] at Hmark
-      by_cases h3 : page_align_is0_b new_size = false
-      · rw [ite_eq_right (by simp [h3])] at Hmark
-        by_cases h4 : page_align_is0_b old_size = false
-        · rw [ite_eq_right (by simp [h4])] at Hmark
-          by_cases h5 : (mremap_source_b (m_vmmaps m) old
-                           (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-                           (page_round_up_Z (old_size.toNat : Int))
-                         && mremap_backing_uniform_b m old
-                              (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = true
-          · rw [ite_eq_right (by rw [h5]; simp)] at Hmark
-            by_cases h6 : page_round_up_Z (new_size.toNat : Int)
-                          ≤ page_round_up_Z (old_size.toNat : Int)
-            · rw [ite_eq_left (by simp [h6])] at Hmark
-              simp at Hmark
-            · rw [ite_eq_right (by simp [h6])] at Hmark
-              change mremap_inplace_grow_b m old ON NN
-                (page_round_up_Z (old_size.toNat : Int))
-                (page_round_up_Z (new_size.toNat : Int)) = false
-              cases hv : mremap_inplace_grow_b m old ON NN
-                  (page_round_up_Z (old_size.toNat : Int))
-                  (page_round_up_Z (new_size.toNat : Int)) with
-              | false => rfl
-              | true =>
-                exfalso
-                unfold mremap_inplace_grow_b at hv
-                dsimp only at hv
-                rw [Bool.and_eq_true, Bool.and_eq_true] at hv
-                obtain ⟨⟨Htop, Hfree⟩, Hgate⟩ := hv
-                rw [decide_eq_true_eq] at Htop
-                have hONn : ON.toNat = page_round_up_Z (old_size.toNat : Int) :=
-                  page_align_is0_b_false_word old_size h4
-                have hNNn : NN.toNat = page_round_up_Z (new_size.toNat : Int) :=
-                  page_align_is0_b_false_word new_size h3
-                have hmain : (old.toNat : Int) % page_size = 0 := (beq_iff_eq).mp h2
-                have hnmod : (page_round_up_Z (new_size.toNat : Int)) % page_size = 0 :=
-                  page_round_up_Z_mod _
-                have hbase : (0 : Int) ≤ page_round_up_Z (old_size.toNat : Int) :=
-                  page_round_up_Z_nonneg _ (bv_unsigned_range_u64 old_size).1
-                have hpos : (0 : Int) < (NN.toNat : Int) := by
-                  rw [hNNn]; omega
-                have hend : (old.toNat : Int) + (NN.toNat : Int) < two_pow_64 := by
-                  rw [hNNn]
-                  have := alloc_top_lt (m_vmmaps m)
-                  omega
-                have hmaps : region_free (map_remove (m_vmmaps m).vm_maps old) old NN = true :=
-                  region_free_app_r _ _ old NN Hfree
-                have hch := mremap_move_charge_at_fresh m old ON old NN
-                  hmain (by rw [hNNn]; exact hnmod) hpos hend Hfit hmaps Hnoacc Hlazy Hpages
-                have heq : mremap_move_budget_b m old ON NN
-                    = mremap_final_budget_b m old ON old NN := by
-                  unfold mremap_move_budget_b mremap_final_budget_b vm_backing_within_limit
-                  rw [hch]
-                  rfl
-                rw [heq] at Hmark
-                rw [Hgate] at Hmark
-                exact absurd Hmark (by simp)
-          · have hfalse : (mremap_source_b (m_vmmaps m) old
-                             (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-                             (page_round_up_Z (old_size.toNat : Int))
-                           && mremap_backing_uniform_b m old
-                                (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) = false := by
-              cases hb : (mremap_source_b (m_vmmaps m) old
-                             (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-                             (page_round_up_Z (old_size.toNat : Int))
-                           && mremap_backing_uniform_b m old
-                                (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))) with
-              | false => rfl
-              | true => exact absurd hb h5
-            rw [ite_eq_left (by rw [hfalse]; simp)] at Hmark
-            simp at Hmark
-        · rw [ite_eq_left (by simp [h4])] at Hmark
-          simp at Hmark
-      · rw [ite_eq_left (by simp [h3])] at Hmark
-        simp at Hmark
-    · rw [ite_eq_left (by simp [h2])] at Hmark
-      simp at Hmark
-  · rw [ite_eq_left (by simp [h1])] at Hmark
-    simp at Hmark
+    mremap_budget_refused_two_gate_b old old_size new_size flags m = true := by
+  obtain ⟨E1, E2, E3, -, E4, E5, Hgrow, -, Hmv⟩ :=
+    mremap_budget_refused_inv old old_size new_size flags m Hmark
+  unfold mremap_budget_refused_two_gate_b
+  dsimp only
+  rw [ite_eq_right (by simp [E1]), ite_eq_right (by simp [E2]),
+      ite_eq_right (by simp [E3]), ite_eq_right (by simp [E4]),
+      ite_eq_right (by rw [E5]; simp), ite_eq_right (by omega)]
+  rw [Hmv, Bool.and_false]
+  rfl
 
 /-- ** mprotect
 
@@ -2126,9 +2198,13 @@ theorem ebreak_refutes_error_free_scfg_budgets_abort (cfg : SpuriousCfg)
     nothing at that configuration is spurious and the configured step
     relation admits exactly the unfiltered steps: the mark is about a
     step no configuration can remove.  Stated for the arms whose
-    soundness lemma covers the whole arm; mremap's mark can fire where
-    a move is still admitted (`ov_mark_fires_while_a_move_fits`), so it
-    is left out here.
+    soundness lemma covers the whole arm on every state.  mremap's does
+    not: the protected-ledger and fit halves are proved invariants
+    (`Checks.NoaccessOwned`, `Checks.MapsFit`), but the lazy-ledger half
+    (no reservation and no materialized page at a fresh destination) is
+    not, so `mremap` is left out of the set below.  On a state whose lazy
+    ledgers are empty the whole arm is covered
+    (`Checks.BudgetPremiseMremap.mremap_budget_refused_is_refusal_sys_inv`).
 
     The number set is stated in `Nat` — `[214, 222, 226]` — because
     `Run.alloc_budget_refused_b` compares `in_sysno.toNat` (a `Nat`); that

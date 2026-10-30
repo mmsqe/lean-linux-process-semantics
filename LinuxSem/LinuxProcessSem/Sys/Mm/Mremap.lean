@@ -140,10 +140,12 @@ namespace LinuxSem.LinuxProcessSem.Sys.Mm.Mremap
       (:1795-1796) are all excluded by the exact-flags test;
       [offset_in_page(addr)] (:1763-1764) and a zero [new_len]
       (:1771-1772) are the deterministic -EINVAL the spec returns itself;
-      a rounded [new_len] above TASK_SIZE (:1775-1776) is a gate v6.12
-      did not have on the
-      MAYMOVE-only path, where the request went on to -ENOMEM from
-      [get_unmapped_area], and [mremap_spec] answers it that way;
+      a rounded [new_len] above TASK_SIZE (:1775-1776) is deterministic
+      -EINVAL too, which the spec returns itself; that gate is younger
+      than the MAYMOVE-only path (a v2.5 kernel tested it only when the
+      caller gave [new_addr], and the request went on to -ENOMEM from
+      [get_unmapped_area]), and v6.18.46 tests it before any VMA is
+      looked up;
       a zero [old_len] on a private vma ([check_prep_vma], :1690-1693) is
       excluded by the clone gate; DONTUNMAP over a VM_DONTEXPAND /
       VM_PFNMAP vma (:1696-1698) is excluded for the same reason as :1795,
@@ -416,10 +418,11 @@ def mremap_inplace_grow_b (m : Model) (old old_n new_n : word)
     The consumer half of that argument is mechanized:
     [mremap_fresh_avoids_noaccess] below derives the missing conjunct
     from [State.noaccess_pages_owned], the page-granular weakening of the
-    containment that survives the brk-shrink exception.  What is left is
-    to prove that invariant preserved by all nine writers of
-    [vm_noaccess], which is the durable fix and is deliberately out of
-    scope here. -/
+    containment that survives the brk-shrink exception.  The other half
+    is mechanized too: [Checks/NoaccessOwned.lean] proves a stronger
+    ledger invariant ([sys_inv]) true of [init_model] and kept by every
+    modeled system call, and derives [noaccess_pages_owned] from it
+    ([sys_inv_noaccess_pages_owned]). -/
 def mremap_fresh_b (m : Model) (old_nZ new_nZ : Int)
     (old old_n dst new_n : word) : Bool :=
   let h := m_vmmaps m
@@ -452,9 +455,9 @@ def mremap_fresh_b (m : Model) (old_nZ new_nZ : Int)
     request has no protected BYTE to reason about while [region_free] can
     still answer false.
 
-    What is NOT proved here is that [noaccess_pages_owned] holds of every
-    reachable state, i.e. that the nine writers of [vm_noaccess] preserve
-    it.  That is the durable fix named above and remains out of scope. -/
+    That [noaccess_pages_owned] holds of every reachable state is
+    [Checks/NoaccessOwned.lean]'s: [init_model_sys_inv],
+    [star_preserves_sys_inv] and [sys_inv_noaccess_pages_owned]. -/
 theorem mremap_fresh_avoids_noaccess (m : Model) (old_nZ new_nZ : Int)
     (old old_n dst new_n : word)
     (Hown : noaccess_pages_owned (m_vmmaps m))
@@ -722,6 +725,12 @@ def mremap_spec (old old_size new_size flags : word)
   then err_ret EINVAL                              -- mm/mremap.c:1027
   else if page_align_is0_b new_size
   then err_ret EINVAL                              -- mm/mremap.c:1031, 1038
+  else if (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+  then err_ret EINVAL
+    -- `check_mremap_params` (mm/mremap.c:1775-1776, Linux v6.18.46): a
+    -- page-aligned new length over TASK_SIZE is -EINVAL before any VMA
+    -- is looked up.  Without this gate a grow past TASK_SIZE fell through
+    -- to the arm's injected -ENOMEM, an answer Linux never gives for it.
   else if page_align_is0_b old_size
   then unmodeled                                   -- clone: mm/mremap.c:839
   else
@@ -818,25 +827,31 @@ def mremap_move_charge (m : Model) (old old_n new_n : word) : Int :=
 def mremap_move_budget_b (m : Model) (old old_n new_n : word) : Bool :=
   decide (mremap_move_charge m old old_n new_n ≤ (m_vmmaps m).vm_limit)
 
-/-- Only a GROW charges, and a grow has both resolutions, each behind
-    its own reading of [mremap_final_budget_b]: in place, on the mapping
-    grown at [old], and moved, on the mapping re-created at a fresh
-    [dst].  THE MARK FIRES WHEN EITHER GATE REFUSES — it tests the larger
-    of the charges, the in-place post-state's directly and the move's
-    through [mremap_move_budget_b] — because neither post-state is
-    charged at least as much as the other on every state:
+/-- Only a GROW charges, and a grow has two non-errno resolutions, each
+    behind its own reading of [mremap_final_budget_b]: in place, on the
+    mapping grown at [old], admitted when [mremap_inplace_grow_b] holds
+    (room above the source AND its budget gate passing); and moved, on
+    the mapping re-created at a fresh [dst], whose gate reads the same
+    charge at every fresh destination, [mremap_move_budget_b].
+
+    THE MARK FIRES WHEN NO PLACEMENT FITS THE BUDGET: the in-place
+    resolution is not admitted AND the move's budget gate refuses.  That
+    is the request Linux refuses for want of memory: where the in-place
+    resolution is unavailable and a move fits, Linux moves the mapping
+    ([expand_vma], mm/mremap.c:1520-1543, Linux v6.18.46, which picks
+    the new address in [vrm_set_new_addr], :957-960) and the call
+    succeeds.  Neither gate alone is the right test, because neither
+    post-state is charged at least as much as the other on every state:
 
     - the in-place post-state can be charged MORE.  The grown tail may
       lie over a lazy neighbour; the in-place evaluation clears that
       neighbour's reservation under the tail and charges its bytes
       eagerly, where a move leaves the neighbour alone.  On such a state
-      the in-place gate refuses while a move fits
-      ([Checks.BudgetPremise.ov_mark_fires_while_a_move_fits] —
-      proved here, as
-      `Checks.BudgetPremise.ov_mark_fires_while_a_move_fits` over the
-      `ov_model` fixture, together with `ov_charges` and
-      `ov_pre_state_within_budget` so the state is reachable-and-in-budget
-      rather than merely inhabited);
+      the in-place gate refuses while a move fits, and the mark is
+      silent (`Checks.BudgetPremise.ov_mark_silent_while_a_move_fits`
+      over the `ov_model` fixture, with `ov_charges` and
+      `ov_pre_state_within_budget` beside it so the state is
+      reachable-and-in-budget rather than merely inhabited);
     - the in-place post-state can be charged LESS.  The charge is
       [State.live_bytes] of [State.vm_backed_maps], which subtracts
       [vm_noaccess] — NOT of [vm_maps].  A PROT_NONE mapping directly
@@ -844,69 +859,65 @@ def mremap_move_budget_b (m : Model) (old old_n new_n : word) : Bool :=
       while a move re-creates the whole mapping at a fresh destination
       and is charged every byte of it.  In-place growth is unavailable
       there (the tail meets a live mapping), so the move is the only
-      non-errno resolution, it is budget-refused, and a mark stated on
-      the in-place post-state alone stays silent
-      ([Checks.BudgetPremise.un_mark_fires_on_the_move_refusal] —
-      proved here, as
-      `Checks.BudgetPremise.un_mark_fires_on_the_move_refusal` over the
-      `un_model` fixture, with `un_charges` and `un_inplace_gate_passes`).
+      non-errno resolution, it is budget-refused, and the mark fires
+      although the in-place gate alone passes
+      (`Checks.BudgetPremise.un_mark_fires_on_the_move_refusal` over the
+      `un_model` fixture, with `un_charges` and
+      `un_inplace_gate_passes`).
 
-    Testing both gates is chosen for being placement-independent: the
-    mark reads neither which resolution the [alt] takes nor the
-    destination the [choose] picks.  The price is that it over-marks on
-    the [ov_model] family (in-place growth unavailable for a non-budget
-    reason, its gate refusing, a move fitting), where a false refusal
-    narrows [Run.source_within_budget] and never unsounds it.  The
-    tighter mark — in-place growth unavailable AND the move's budget
-    gate refusing — is silent there and is not written.
+    The mark stays placement-independent: it reads neither which
+    resolution the [alt] takes nor the destination the [choose] picks,
+    only whether in-place growth is admitted and the destination-free
+    charge of a move.  It does not ask whether a fresh destination
+    EXISTS: an address space with no free range is a refusal of its own
+    kind, not of the budget, and is not marked unless the move's charge
+    is also over the budget.  That is the same direction of
+    approximation the in-place gate alone has — an in-place grow past
+    [State.alloc_top] or into the image is not marked either.
 
-    The mark is therefore at least as strong as EITHER resolution's
-    refusal, never weaker: a gate that refuses is a mark that fires, in
-    both directions of the charge order.  That much is visible by
-    unfolding the definition below.  The converse fails exactly on
-    the first case above, where the mark fires although a move fits —
-    an over-approximation, on a reachable state, and the safe direction
-    for a premise: it narrows the claim's scope and never lets a
-    budget-refused source through.
+    An earlier version fired when EITHER gate refused, and so over-marked
+    the first case above: an execution Linux completes by moving counted
+    as budget-refused, and [Run.source_within_budget] dropped the input.
+    The present mark implies that one and not conversely
+    (`Checks.BudgetPremise.mremap_budget_refused_implies_two_gate` and
+    `.ov_two_gate_fires_where_the_mark_is_silent`; the earlier mark is
+    kept in that module as `mremap_budget_refused_two_gate_b`, and
+    nowhere else).
 
     `Checks.BudgetPremise` PINS the rule:
-    [mremap_budget_refused_fires_on_inplace_refusal] and
-    [mremap_budget_refused_refuses_move] (each gate's refusal fires the
-    mark, the move's at any fresh destination),
-    [mremap_budget_refused_refuses_inplace] (where the mark fires, the
-    in-place resolution is not admitted, on any state satisfying the
-    ledger invariants — the hypotheses it names are instances of
-    [State.noaccess_pages_owned] and of the reservation-under-live-mapping
-    invariant of the lazy ledgers at the grown range), and the concrete states
-    above, which fix the direction of each approximation so a later
-    change cannot restate the mark on one gate and turn it back into an
-    under-approximation.  Shrinks, the equal-size answer, and every
-    shape the arm declines or answers -EINVAL are not budget refusals.
+    `.mremap_budget_refused_iff` (the mark, on a grow past the argument
+    gates, is exactly "not admitted in place and the move's gate
+    refuses"); `.mremap_budget_refused_inv` (what a fired mark says);
+    `.mremap_budget_refused_refuses_inplace` (where the mark fires, the
+    in-place resolution is not admitted — no ledger hypothesis, because
+    the mark reads the in-place admission directly) and
+    `.mremap_budget_refused_refuses_move` (where the mark fires, no
+    fresh destination that carries no backing metadata is admitted) —
+    together, a marked request has no non-errno resolution on a state
+    keeping the ledger invariants;
+    `.mremap_budget_refused_fires_on_move_refusal` (in-place unavailable
+    and the move refused at one fresh destination that carries no
+    backing metadata fires the mark); and the concrete states above.
+    Shrinks, the equal-size answer, and every shape the arm declines or
+    answers -EINVAL are not budget refusals.
 
-    **`Checks/BudgetPremise.v` IS PORTED** — the notes's "not
-    ported" note on it is stale — with all 140 of its declarations, so every
-    pin named above exists in this tree at the same name:
-    `Checks.BudgetPremise.mremap_budget_refused_fires_on_inplace_refusal`,
-    `.mremap_budget_refused_refuses_move`,
-    `.mremap_budget_refused_refuses_inplace`, and the `ov_*` / `un_*`
-    fixtures.  What is left HERE is the definition of
-    [mremap_budget_refused_b] and the argument above; the theorem that
-    relates a fired mark back to a resolution the checker refuses lives one
-    module up, in `Checks.BudgetPremise`, and it IS proved there
-    ([Checks.BudgetPremise.mremap_budget_refused_refuses_inplace]).  Its
-    four hypotheses — no live mapping above the
-    source, nothing protected under the grown range, and the lazy and
-    materialized ledgers unchanged by the growth — are invariants of
-    reachable states that are not yet DERIVED from one, so the hedge sits on
-    those four and not on the lemma.  Where a consumer
-    relies on the mark's reading through [Run.source_within_budget] it has to
-    supply them; the hedge is on those four hypotheses, and the lemma itself
-    is a discharged claim. -/
+    **THE MODULE IS PORTED.**  `Checks.BudgetPremise` carries every
+    declaration named above, so each pin above exists in this tree at
+    the same name; what is left HERE is the definition of
+    [mremap_budget_refused_b] and the argument.  The four ledger
+    hypotheses `mremap_budget_refused_refuses_move` takes — no live
+    mapping above the source, nothing protected under the destination,
+    and the lazy and materialized ledgers unchanged by the move — are
+    invariants of reachable states that are not yet DERIVED from one, so
+    the hedge sits on those four and not on the lemma: where a consumer
+    relies on the mark's reading through [Run.source_within_budget] it
+    has to supply them. -/
 def mremap_budget_refused_b (old old_size new_size flags : word)
     (m : Model) : Bool :=
   if !((flags.toNat : Int) == MREMAP_MAYMOVE) then false
   else if !(((old.toNat : Int) % page_size) == 0) then false
   else if page_align_is0_b new_size then false
+  else if (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int) then false
   else if page_align_is0_b old_size then false
   else
     let h := m_vmmaps m
@@ -918,7 +929,7 @@ def mremap_budget_refused_b (old old_size new_size flags : word)
          mremap_backing_uniform_b m old old_n)
     then false
     else if new_nZ ≤ old_nZ then false
-    else !(mremap_final_budget_b m old old_n old new_n &&
+    else !(mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ ||
            mremap_move_budget_b m old old_n new_n)
 
 /- -------------------------------------------------------------------------
@@ -1642,9 +1653,10 @@ private theorem cloneCheck {old old_size new_size flags : word}
     (Hflag : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
     (Halign : (((old.toNat : Int) % page_size) == 0) = true)
     (Hnew : page_align_is0_b new_size = false)
+    (Htask : ((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)) = false)
     (Hold : page_align_is0_b old_size = true) :
     mremap_spec old old_size new_size flags i m .unmodeled := by
-  simp [mremap_spec, Hflag, Halign, Hnew, Hold, unmodeled]
+  simp [mremap_spec, Hflag, Halign, Hnew, Htask, Hold, unmodeled]
 
 /-- AN EQUAL-SIZE CALL IS A NO-OP RETURNING [old] — and it sits OUTSIDE the
     [alt] that offers ENOMEM, which is why Linux's equal-size arm carries no
@@ -1654,6 +1666,7 @@ private theorem equalCheck {old old_size new_size flags : word}
     (Hflag : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
     (Halign : (((old.toNat : Int) % page_size) == 0) = true)
     (Hnew : page_align_is0_b new_size = false)
+    (Htask : ((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)) = false)
     (Hold : page_align_is0_b old_size = false)
     (Hsrc : (mremap_source_b (m_vmmaps m) old
         (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
@@ -1664,7 +1677,7 @@ private theorem equalCheck {old old_size new_size flags : word}
         = page_round_up_Z (new_size.toNat : Int)) :
     mremap_spec old old_size new_size flags i m
       (.ok (mkEffect old [] []) m []) := by
-  simp only [mremap_spec, Hflag, Halign, Hnew, Hold, bind_getModel, Hsrc,
+  simp only [mremap_spec, Hflag, Halign, Hnew, Htask, Hold, bind_getModel, Hsrc,
     Bool.not_true, Bool.false_eq_true, ite_false]
   rw [Heq]
   simp [ret_only, pure]
@@ -1676,6 +1689,7 @@ private theorem sourceDeclineCheck {old old_size new_size flags : word}
     (Hflag : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
     (Halign : (((old.toNat : Int) % page_size) == 0) = true)
     (Hnew : page_align_is0_b new_size = false)
+    (Htask : ((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)) = false)
     (Hold : page_align_is0_b old_size = false)
     (Hsrc : mremap_source_b (m_vmmaps m) old
           (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
@@ -1683,7 +1697,7 @@ private theorem sourceDeclineCheck {old old_size new_size flags : word}
         mremap_backing_uniform_b m old
           (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) = false) :
     mremap_spec old old_size new_size flags i m .unmodeled := by
-  simp only [mremap_spec, Hflag, Halign, Hnew, Hold, Bool.not_true,
+  simp only [mremap_spec, Hflag, Halign, Hnew, Htask, Hold, Bool.not_true,
     Bool.false_eq_true, ite_false]
   rw [bind_getModel]
   simp [Hsrc, unmodeled]
@@ -1697,6 +1711,7 @@ private theorem shrinkCheck {old old_size new_size flags : word}
     (Hflag : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
     (Halign : (((old.toNat : Int) % page_size) == 0) = true)
     (Hnew : page_align_is0_b new_size = false)
+    (Htask : ((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)) = false)
     (Hold : page_align_is0_b old_size = false)
     (Hsrc : (mremap_source_b (m_vmmaps m) old
         (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
@@ -1716,7 +1731,7 @@ private theorem shrinkCheck {old old_size new_size flags : word}
         (mremap_model_next m old
           (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))) old
           (BitVec.ofInt 64 (page_round_up_Z (new_size.toNat : Int)))) []) := by
-  simp only [mremap_spec, Hflag, Halign, Hnew, Hold, Bool.not_true,
+  simp only [mremap_spec, Hflag, Halign, Hnew, Htask, Hold, Bool.not_true,
     Bool.false_eq_true, ite_false]
   rw [bind_getModel]
   simp only [Hsrc, Hne, Bool.not_true, Bool.false_eq_true, ite_false, alt]
@@ -1733,6 +1748,7 @@ private theorem errnoCheck {old old_size new_size flags : word}
     (Hflag : ((flags.toNat : Int) == MREMAP_MAYMOVE) = true)
     (Halign : (((old.toNat : Int) % page_size) == 0) = true)
     (Hnew : page_align_is0_b new_size = false)
+    (Htask : ((TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)) = false)
     (Hold : page_align_is0_b old_size = false)
     (Hsrc : (mremap_source_b (m_vmmaps m) old
         (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
@@ -1743,7 +1759,7 @@ private theorem errnoCheck {old old_size new_size flags : word}
         == page_round_up_Z (new_size.toNat : Int)) = false) :
     mremap_spec old old_size new_size flags i m
       (.ok (mkEffect (errno_ret ENOMEM) [] []) m []) := by
-  simp only [mremap_spec, Hflag, Halign, Hnew, Hold, Bool.not_true,
+  simp only [mremap_spec, Hflag, Halign, Hnew, Htask, Hold, Bool.not_true,
     Bool.false_eq_true, ite_false]
   rw [bind_getModel]
   simp only [Hsrc, Hne, Bool.not_true, Bool.false_eq_true, ite_false, alt]
@@ -1810,7 +1826,8 @@ example :
     mremap_spec (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 0)
       (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 1) demoInput demoModel
       .unmodeled := by
-  refine cloneCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_
+  refine cloneCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_
+  · decide
   · decide
   · decide
   · decide
@@ -1822,7 +1839,8 @@ example :
     mremap_spec (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 0x1000)
         (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 1) demoInput demoModel
       (.ok (mkEffect (BitVec.ofInt 64 0x1000) [] []) demoModel []) := by
-  refine equalCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_ ?_
+  refine equalCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  · decide
   · decide
   · decide
   · decide
@@ -1836,7 +1854,8 @@ example :
     mremap_spec (BitVec.ofInt 64 0x2000) (BitVec.ofInt 64 0x1000)
       (BitVec.ofInt 64 0x2000) (BitVec.ofInt 64 1) demoInput demoModel
       .unmodeled := by
-  refine sourceDeclineCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_
+  refine sourceDeclineCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_ ?_
+  · decide
   · decide
   · decide
   · decide
@@ -1857,7 +1876,7 @@ example :
         (mremap_model_next demoModelLarge (BitVec.ofInt 64 0x1000)
           (BitVec.ofInt 64 (page_round_up_Z 0x3000)) (BitVec.ofInt 64 0x1000)
           (BitVec.ofInt 64 (page_round_up_Z 0x2000))) []) := by
-  refine shrinkCheck (i := demoInput) (m := demoModelLarge) ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  refine shrinkCheck (i := demoInput) (m := demoModelLarge) ?_ ?_ ?_ ?_ ?_ ?_ ?_ ?_
   all_goals decide
 
 /-- THE ENOMEM DECLINE on the answered shape: the source is one tracked
@@ -1867,7 +1886,8 @@ example :
     mremap_spec (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 0x1000)
         (BitVec.ofInt 64 0x2000) (BitVec.ofInt 64 1) demoInput demoModel
       (.ok (mkEffect (errno_ret ENOMEM) [] []) demoModel []) := by
-  refine errnoCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_ ?_
+  refine errnoCheck (i := demoInput) (m := demoModel) ?_ ?_ ?_ ?_ ?_ ?_ ?_
+  · decide
   · decide
   · decide
   · decide
