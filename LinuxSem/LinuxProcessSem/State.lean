@@ -664,9 +664,9 @@ theorem readable_bytes_eq (mp : word → Option byte) (a len : word) :
     (mm/util.c, `mmap_base`) goes below zero and wraps in the kernel's
     unsigned arithmetic; no positive floor holds of every rlimit and
     every draw, and the Sv39 instance admits any page-aligned base up to
-    its cap rather than a floor that would exclude a real one.  The
-    floor is read by no arm (`mmap_base_min`'s note), so this costs
-    nothing but honesty.
+    its cap rather than a floor that would exclude a real one;
+    `Checks.Cases.MmapBase.sv39_band_is_linux_set` proves that set is
+    exactly the non-wrapped bases Linux gives.
 
     WHAT THE DECLARATION BUYS TODAY, stated here so nobody reads more
     into it: the spec arms below still compare against `TASK_SIZE`, the
@@ -1878,7 +1878,28 @@ def brk_aslr_max : Int := 1 * 1024 * 1024 * 1024
 /-- MMAP-BASE FLOOR: the smallest `mm->mmap_base` any covered kernel
     computes for a top-down layout = 0x154555557000.  Derived from
     `STACK_TOP - MAX_GAP - rnd` with `MIN_GAP = SZ_128M`,
-    `MAX_GAP = STACK_TOP/6*5`, and `ARCH_MMAP_RND_BITS_MAX = 24`. -/
+    `MAX_GAP = STACK_TOP/6*5`, and `vm.mmap_rnd_bits` at most 24.
+
+    THE NAMED ASSUMPTIONS, which the rest of the model does not check:
+    the top-down layout (no `ADDR_COMPAT_LAYOUT`, `vm.legacy_va_layout`
+    = 0), and `vm.mmap_rnd_bits` at most 24 OR `stack_guard_gap` at most
+    0x4aba6a2ab000 bytes (about 74.7 TiB).  The sysctl's range is 18
+    (`arch/riscv/Kconfig`) to `MMAP_VA_BITS - PAGE_SHIFT - 3`
+    (arch/riscv/mm/init.c), which is 33 under Sv48; its boot value
+    `CONFIG_ARCH_MMAP_RND_BITS` is at most 24, and only root raises it
+    past that, through /proc/sys/vm/mmap_rnd_bits.
+
+    `Checks.Cases.MmapBase.sv48_band_is_linux_set` proves the band
+    `[mmap_base_min, mmap_base_max]` is EXACTLY the set of bases a launch
+    under those assumptions gives, so an error in either constant fails
+    the build, and the examples beside it show each assumption is needed.
+
+    WHY NOT LOWER, to the smallest base Linux gives without them: no spec
+    arm reads the base (placement is admissibility alone), but the ASan
+    plan checker does.  `Common.AsanInit` starts its placement split at
+    `AsanPlanCore.MBASE_MIN` = this value, and
+    `AsanPlacement.kHighMemBeg_below_mmap_base_min` needs it above the
+    ASan high shadow, so a lower floor would make those proofs false. -/
 def mmap_base_min : Int := 0x154555557000
 
 /-- MMAP-BASE CAP: the largest `mm->mmap_base` for a top-down layout =
@@ -1914,7 +1935,8 @@ def va_mmap_base_max (v : VaSize) : Int := va_stack_top v - 128 * 1024 * 1024
 /-- Under Sv39 `mmap_base`'s own subtraction can wrap, so no positive
     floor holds of every draw; the Sv39 instance admits any page-aligned
     base up to the cap rather than a floor that would exclude a real one.
-    (The floor is read by no arm.) -/
+    `Checks.Cases.MmapBase.sv39_band_is_linux_set` proves that this set is
+    exactly the bases a launch gives that do not wrap. -/
 def va_mmap_base_min : VaSize → Int
   | .Sv39 => 0
   | .Sv48 => mmap_base_min
