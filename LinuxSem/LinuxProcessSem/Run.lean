@@ -179,10 +179,10 @@ def apply_zeros (mem : word → Option byte) (zs : List (word × word)) :
     mremap, or the tail a brk shrink frees — see `State.eff_unmaps`): every
     covered address becomes UNMAPPED in the writable overlay, so a later
     load faults instead of reading stale bytes, as on Linux.  The SPECS only
-    unmap whole recorded anonymous mappings or contained subranges, disjoint
-    from every loaded segment and from the stack, so erasing the overlay
-    really makes the range inaccessible (there is no segment underneath for
-    reads to fall back to). -/
+    unmap recorded anonymous mappings, their subranges, or ranges of them and
+    free pages, disjoint from every loaded segment and from the stack, so
+    erasing the overlay really makes the range inaccessible (there is no
+    segment underneath for reads to fall back to). -/
 def apply_unmaps (mem : word → Option byte) (us : List (word × word)) :
     word → Option byte :=
   match us with
@@ -1428,6 +1428,318 @@ def alloc_budget_refused_b (i : SyscallInput) (m : Model) : Bool :=
     Sys.Mm.Mprotect.mprotect_budget_refused_b (in_arg i 0) (in_arg i 1) (in_arg i 2) m
   else false
 
+/-! ## Classifying a budget refusal: oversize vs cumulative
+
+    `alloc_budget_refused_b` records that a request was refused for
+    budget, not why.  `alloc_refuse_reason` reads the same pre-state and
+    request and gives `.RefuseOversize` when the request's charge alone
+    exceeds `State.vm_limit`, and `.RefuseBudget` otherwise.  It adds no
+    transition; each arm still answers its own refusal (-ENOMEM, or the
+    unmoved break for `brk`).  The threshold is the budget, not a
+    per-request cap.
+
+    A premise built on `budget_only_refused_at` (below) still excludes: a
+    cumulative refusal of a request that fits the budget alone, whatever
+    controls its size; every first-touch refusal of a MAP_NORESERVE
+    mapping; and a `brk` whose growth fits the budget but whose heap does
+    not (the charge is the growth above the current break). -/
+inductive RefuseReason : Type
+  | RefuseBudget
+  | RefuseOversize
+  deriving DecidableEq, Repr
+
+/-- The charge of the pending request: the byte growth above the current
+    break for `brk`, the page-rounded length or new size for the others,
+    and 0 for any other syscall.  The argument indices are those of
+    `alloc_budget_refused_b`; the per-arm lemmas below tie this charge to
+    each arm's gate. -/
+def alloc_req_charge_bytes (i : SyscallInput) (m : Model) : Int :=
+  let no := i.in_sysno.toNat
+  if no = 214 then
+    max 0 (((in_arg i 0).toNat : Int) - (((m_vmmaps m).vm_brk).toNat : Int))
+  else if no = 216 then page_round_up_Z ((in_arg i 2).toNat : Int)
+  else if no = 222 then page_round_up_Z ((in_arg i 1).toNat : Int)
+  else if no = 226 then page_round_up_Z ((in_arg i 1).toNat : Int)
+  else 0
+
+/-- The classified budget refusal.  `none` exactly when the request is
+    not budget-refused at all; otherwise the cause.  `.RefuseOversize`
+    takes priority: a refused request whose charge alone exceeds the whole
+    budget is classified oversize, however much budget is left. -/
+def alloc_refuse_reason (i : SyscallInput) (m : Model) : Option RefuseReason :=
+  if alloc_budget_refused_b i m then
+    if (m_vmmaps m).vm_limit < alloc_req_charge_bytes i m then
+      some .RefuseOversize  -- the request alone exceeds the budget
+    else some .RefuseBudget -- refused only by cumulative use
+  else none
+
+/-- Faithfulness: the classifier refines `alloc_budget_refused_b` and
+    changes nothing — it fires on exactly the configurations the mark
+    already fires on, so no new input is excluded or admitted. -/
+theorem alloc_refuse_reason_none_iff_not_refused (i : SyscallInput) (m : Model) :
+    alloc_refuse_reason i m = none ↔ alloc_budget_refused_b i m = false := by
+  unfold alloc_refuse_reason
+  by_cases hb : alloc_budget_refused_b i m = true
+  · rw [ite_eq_left hb]
+    constructor
+    · intro h
+      split at h <;> simp at h
+    · intro h
+      simp [hb] at h
+  · rw [ite_eq_right hb]
+    have hf : alloc_budget_refused_b i m = false := by
+      cases hv : alloc_budget_refused_b i m <;> simp_all
+    rw [hf]
+    simp
+
+/-! ### The charge is the refusing gate's own charge, arm by arm
+
+    For each `FamAlloc` arm: where its mark fires, the budget gate the
+    arm consults is false when applied to `alloc_req_charge_bytes`.  For
+    `brk` the gate is `vm_backing_used + charge ≤ vm_limit` verbatim;
+    for the other arms the charge is the page-rounded size `n` each gate
+    is applied to. -/
+theorem alloc_req_charge_brk (i : SyscallInput) (m : Model)
+    (Hno : i.in_sysno.toNat = 214)
+    (Hb : alloc_budget_refused_b i m = true) :
+    0 < alloc_req_charge_bytes i m
+    ∧ Sys.Mm.Mmap.brk_budget_ok m (in_arg i 0)
+        = decide (vm_backing_used m + alloc_req_charge_bytes i m
+                  ≤ (m_vmmaps m).vm_limit)
+    ∧ Sys.Mm.Mmap.brk_budget_ok m (in_arg i 0) = false := by
+  unfold alloc_budget_refused_b at Hb
+  rw [ite_eq_left Hno] at Hb
+  unfold Sys.Mm.Mmap.brk_budget_refused_b at Hb
+  dsimp only at Hb
+  rw [Bool.and_eq_true, Bool.and_eq_true, Bool.and_eq_true] at Hb
+  obtain ⟨⟨⟨-, Hpos⟩, Hgt⟩, Hok⟩ := Hb
+  rw [decide_eq_true_eq] at Hpos
+  rw [decide_eq_true_eq] at Hgt
+  rw [Bool.not_eq_true'] at Hok
+  have hbrk : (((m_vmmaps m).vm_brk).toNat : Int) < ((in_arg i 0).toNat : Int) := Hgt
+  have hgt : 0 < ((in_arg i 0).toNat : Int) - (((m_vmmaps m).vm_brk).toNat : Int) := by
+    omega
+  have hc : alloc_req_charge_bytes i m
+      = ((in_arg i 0).toNat : Int) - (((m_vmmaps m).vm_brk).toNat : Int) := by
+    unfold alloc_req_charge_bytes
+    rw [ite_eq_left Hno]
+    omega
+  have hsz : (((in_arg i 0) - (m_vmmaps m).vm_brk).toNat : Int)
+      = ((in_arg i 0).toNat : Int) - (((m_vmmaps m).vm_brk).toNat : Int) := by
+    have hle : (m_vmmaps m).vm_brk ≤ in_arg i 0 := by
+      rw [BitVec.le_def]
+      have := bv_unsigned_range_u64 (in_arg i 0)
+      have := bv_unsigned_range_u64 ((m_vmmaps m).vm_brk)
+      omega
+    rw [BitVec.toNat_sub_of_le hle]
+    have hb := bv_unsigned_range_u64 ((m_vmmaps m).vm_brk)
+    have hr := bv_unsigned_range_u64 (in_arg i 0)
+    omega
+  refine ⟨?_, ?_, Hok⟩
+  · rw [hc]; exact hgt
+  · unfold Sys.Mm.Mmap.brk_budget_ok
+    dsimp only
+    rw [hsz, hc]
+
+/-- The `mremap` arm: the charge is the page-rounded new size, and where
+    the mark fires neither resolution of the grow is budget-admitted at
+    it. -/
+theorem alloc_req_charge_mremap (i : SyscallInput) (m : Model)
+    (Hno : i.in_sysno.toNat = 216)
+    (Hb : alloc_budget_refused_b i m = true) :
+    page_round_up_Z ((in_arg i 1).toNat : Int) < alloc_req_charge_bytes i m
+    ∧ Sys.Mm.Mremap.mremap_inplace_grow_b m (in_arg i 0)
+        (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int)))
+        (BitVec.ofInt 64 (alloc_req_charge_bytes i m))
+        (page_round_up_Z ((in_arg i 1).toNat : Int))
+        (alloc_req_charge_bytes i m) = false
+    ∧ Sys.Mm.Mremap.mremap_move_budget_b m (in_arg i 0)
+        (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int)))
+        (BitVec.ofInt 64 (alloc_req_charge_bytes i m)) = false := by
+  have hc : alloc_req_charge_bytes i m = page_round_up_Z ((in_arg i 2).toNat : Int) := by
+    unfold alloc_req_charge_bytes
+    rw [ite_eq_right (by omega), ite_eq_left Hno]
+  unfold alloc_budget_refused_b at Hb
+  rw [ite_eq_right (by omega), ite_eq_left Hno] at Hb
+  unfold Sys.Mm.Mremap.mremap_budget_refused_b at Hb
+  dsimp only at Hb
+  by_cases h1 : (!(((in_arg i 3).toNat : Int) == Sys.Uapi.MREMAP_MAYMOVE)) = true
+  · rw [ite_eq_left h1] at Hb; simp at Hb
+  · rw [ite_eq_right h1] at Hb
+    by_cases h2 : (!((((in_arg i 0).toNat : Int) % page_size) == 0)) = true
+    · rw [ite_eq_left h2] at Hb; simp at Hb
+    · rw [ite_eq_right h2] at Hb
+      by_cases h3 : Sys.Mm.Mremap.page_align_is0_b (in_arg i 2) = true
+      · rw [ite_eq_left h3] at Hb; simp at Hb
+      · rw [ite_eq_right h3] at Hb
+        by_cases h4 : (TASK_SIZE : Int) < page_round_up_Z ((in_arg i 2).toNat : Int)
+        · rw [ite_eq_left h4] at Hb; simp at Hb
+        · rw [ite_eq_right h4] at Hb
+          by_cases h5 : Sys.Mm.Mremap.page_align_is0_b (in_arg i 1) = true
+          · rw [ite_eq_left h5] at Hb; simp at Hb
+          · rw [ite_eq_right h5] at Hb
+            by_cases h6 : (!(Sys.Mm.Mremap.mremap_source_b (m_vmmaps m) (in_arg i 0)
+                             (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int)))
+                             (page_round_up_Z ((in_arg i 1).toNat : Int))
+                           && Sys.Mm.Mremap.mremap_backing_uniform_b m (in_arg i 0)
+                                (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int))))) = true
+            · rw [ite_eq_left h6] at Hb; simp at Hb
+            · rw [ite_eq_right h6] at Hb
+              by_cases h7 : page_round_up_Z ((in_arg i 2).toNat : Int)
+                  ≤ page_round_up_Z ((in_arg i 1).toNat : Int)
+              · rw [ite_eq_left h7] at Hb; simp at Hb
+              · rw [ite_eq_right h7] at Hb
+                rw [Bool.not_eq_true'] at Hb
+                obtain ⟨hip, hmv⟩ := Bool.or_eq_false_iff.mp Hb
+                rw [hc]
+                exact ⟨by omega, hip, hmv⟩
+
+/-- The `mmap` arm: the charge is the page-rounded length, and where the
+    mark fires ONE of the three budget gates the rw and anonymous shapes
+    consult is false at it. -/
+theorem alloc_req_charge_mmap (i : SyscallInput) (m : Model)
+    (Hno : i.in_sysno.toNat = 222)
+    (Hb : alloc_budget_refused_b i m = true) :
+    Sys.Mm.Mmap.mmap_noreserve_backed_ok (in_arg i 3) m (alloc_req_charge_bytes i m) = false
+    ∨ Sys.Mm.Mmap.mmap_fixed_rw_budget_ok (in_arg i 3) m (in_arg i 0)
+        (BitVec.ofInt 64 (alloc_req_charge_bytes i m)) = false
+    ∨ Sys.Mm.Mmap.mmap_fixed_rw_span_budget_ok (in_arg i 3) m (in_arg i 0)
+        (BitVec.ofInt 64 (alloc_req_charge_bytes i m)) = false := by
+  have hc : alloc_req_charge_bytes i m = page_round_up_Z ((in_arg i 1).toNat : Int) := by
+    unfold alloc_req_charge_bytes
+    rw [ite_eq_right (by omega), ite_eq_right (by omega), ite_eq_left Hno]
+  rw [hc]
+  unfold alloc_budget_refused_b at Hb
+  rw [ite_eq_right (by omega), ite_eq_right (by omega), ite_eq_left Hno] at Hb
+  unfold Sys.Mm.Mmap.mmap_budget_refused_b at Hb
+  dsimp only at Hb
+  -- The argument gates: `Hb` can be `true` only down the `else` side.
+  have d1 : ¬((!Sys.Mm.Mmap.mmap_off_aligned_b (in_arg i 5)) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d1] at Hb
+  have d2 : ¬((!Sys.Mm.Mmap.mmap_anon_b (in_arg i 3)) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d2] at Hb
+  have d3 : ¬(Sys.Syscall.w_is0 (in_arg i 1) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d3] at Hb
+  -- the anonymous shape: its gate IS the charge's
+  by_cases h4 : Sys.Mm.Mmap.mmap_modeled_b (in_arg i 2) (in_arg i 3) (in_arg i 5) = true
+  · rw [ite_eq_left h4] at Hb
+    rw [Bool.not_eq_true'] at Hb
+    exact Or.inl Hb
+  rw [ite_eq_right h4] at Hb
+  have d5 : ¬(Sys.Mm.Mmap.mmap_noaccess_b (in_arg i 2) (in_arg i 3) (in_arg i 5) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d5] at Hb
+  have d6 : ¬(Sys.Mm.Mmap.mmap_fixed_noaccess_b (in_arg i 2) (in_arg i 3) (in_arg i 5) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d6] at Hb
+  by_cases h7 : Sys.Mm.Mmap.mmap_fixed_rw_b (in_arg i 2) (in_arg i 3) (in_arg i 5) = true
+  · rw [ite_eq_left h7] at Hb
+    -- the address gates of the placed rw request
+    have e1 : ¬(two_pow_64 ≤ ((in_arg i 0).toNat : Int) + page_round_up_Z ((in_arg i 1).toNat : Int)) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right e1] at Hb
+    have e2 : ¬(¬(((in_arg i 0).toNat : Int) + page_round_up_Z ((in_arg i 1).toNat : Int) ≤ alloc_top (m_vmmaps m))) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right e2] at Hb
+    have e3 : ¬((!(((in_arg i 0).toNat : Int) % page_size == 0)) = true) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right e3] at Hb
+    have e4 : ¬(¬(0 < ((in_arg i 0).toNat : Int))) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right e4] at Hb
+    -- a contained request
+    by_cases e5 : (region_free (m_vmmaps m).vm_reserved (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int))) &&
+        map_contains (m_vmmaps m).vm_maps (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int)))) = true
+    · rw [ite_eq_left e5] at Hb
+      rw [Bool.not_eq_true'] at Hb
+      exact Or.inr (Or.inl Hb)
+    rw [ite_eq_right e5] at Hb
+    -- a request over free pages: the anonymous gate again
+    by_cases e6 : region_free ((m_vmmaps m).vm_reserved ++ (m_vmmaps m).vm_maps)
+        (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int))) = true
+    · rw [ite_eq_left e6] at Hb
+      rw [Bool.not_eq_true'] at Hb
+      exact Or.inl Hb
+    rw [ite_eq_right e6] at Hb
+    -- a spanning request
+    by_cases e7 : region_free (m_vmmaps m).vm_reserved (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int))) = true
+    · rw [ite_eq_left e7] at Hb
+      rw [Bool.not_eq_true'] at Hb
+      exact Or.inr (Or.inr Hb)
+    rw [ite_eq_right e7] at Hb
+    simp at Hb
+  rw [ite_eq_right h7] at Hb
+  have d8 : ¬(Sys.Mm.Mmap.mmap_noreplace_noaccess_b (in_arg i 2) (in_arg i 3) (in_arg i 5) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d8] at Hb
+  by_cases h9 : Sys.Mm.Mmap.mmap_noreplace_rw_b (in_arg i 2) (in_arg i 3) (in_arg i 5) = true
+  · rw [ite_eq_left h9] at Hb
+    have f1 : ¬(two_pow_64 ≤ ((in_arg i 0).toNat : Int) + page_round_up_Z ((in_arg i 1).toNat : Int)) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right f1] at Hb
+    have f2 : ¬(¬(((in_arg i 0).toNat : Int) + page_round_up_Z ((in_arg i 1).toNat : Int) ≤ alloc_top (m_vmmaps m))) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right f2] at Hb
+    have f3 : ¬((!(((in_arg i 0).toNat : Int) % page_size == 0)) = true) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right f3] at Hb
+    have f4 : ¬(¬(0 < ((in_arg i 0).toNat : Int))) := by
+      intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+    rw [ite_eq_right f4] at Hb
+    by_cases f5 : region_free ((m_vmmaps m).vm_reserved ++ (m_vmmaps m).vm_maps)
+        (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int))) = true
+    · rw [ite_eq_left f5] at Hb
+      rw [Bool.not_eq_true'] at Hb
+      exact Or.inl Hb
+    rw [ite_eq_right f5] at Hb
+    simp at Hb
+  rw [ite_eq_right h9] at Hb
+  simp at Hb
+
+/-- The `mprotect` arm: the charge is the page-rounded length, and where
+    the mark fires the exposure's gate is false at it. -/
+theorem alloc_req_charge_mprotect (i : SyscallInput) (m : Model)
+    (Hno : i.in_sysno.toNat = 226)
+    (Hb : alloc_budget_refused_b i m = true) :
+    Sys.Mm.Mprotect.mprotect_budget_ok m (in_arg i 0)
+      (BitVec.ofInt 64 (alloc_req_charge_bytes i m)) = false := by
+  have hc : alloc_req_charge_bytes i m = page_round_up_Z ((in_arg i 1).toNat : Int) := by
+    unfold alloc_req_charge_bytes
+    rw [ite_eq_right (by omega), ite_eq_right (by omega), ite_eq_right (by omega),
+      ite_eq_left Hno]
+  rw [hc]
+  unfold alloc_budget_refused_b at Hb
+  rw [ite_eq_right (by omega), ite_eq_right (by omega), ite_eq_right (by omega),
+      ite_eq_left Hno] at Hb
+  unfold Sys.Mm.Mprotect.mprotect_budget_refused_b at Hb
+  dsimp only at Hb
+  have d1 : ¬(Sys.Mm.Mprotect.mprotect_grows_conflict_b (in_arg i 2) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d1] at Hb
+  have d2 : ¬((!(((in_arg i 0).toNat : Int) % page_size == 0)) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d2] at Hb
+  have d3 : ¬(Sys.Syscall.w_is0 (in_arg i 1) = true) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d3] at Hb
+  have d4 : ¬(two_pow_64 ≤ ((in_arg i 0).toNat : Int) + page_round_up_Z ((in_arg i 1).toNat : Int)) := by
+    intro hh; rw [ite_eq_left hh] at Hb; simp at Hb
+  rw [ite_eq_right d4] at Hb
+  by_cases h5 : Sys.Mm.Mprotect.mprotect_modeled_b (in_arg i 2) = true
+  · rw [ite_eq_left h5] at Hb
+    by_cases h6 : (map_contains (m_vmmaps m).vm_noaccess (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int))) &&
+        map_contains (m_vmmaps m).vm_maps (in_arg i 0) (BitVec.ofInt 64 (page_round_up_Z ((in_arg i 1).toNat : Int)))) = true
+    · rw [ite_eq_left h6] at Hb
+      rw [Bool.not_eq_true'] at Hb
+      exact Hb
+    rw [ite_eq_right h6] at Hb
+    simp at Hb
+  rw [ite_eq_right h5] at Hb
+  simp at Hb
+
 theorem lookup_injected_in : ∀ (t : List InjectedArm) (n : Nat) (a : InjectedArm),
     lookup_injected t n = some a → a ∈ t ∧ a.ia_no = n := by
   intro t
@@ -2267,12 +2579,19 @@ theorem budget_refused_at_no_lazy_syscall (segs : List Segment) (ms : machine_st
     configured reachability is the unfiltered one
     (`reaches_budget_refused_cfg_may_fail`).
 
-    Not for mremap: its mark fires when either of a grow's budget gates
-    refuses, the in-place post-state's or the move's, so it can fire where a
-    move is still admitted, and under a forced-only configuration the refusal
-    it marks can be spurious and the filter drops that step; the marked
-    configuration is still reached, so the premise is unaffected, and the mark
-    stays an over-approximation in the safe direction there. -/
+    Not for mremap: where its mark fires, the in-place resolution is never
+    admitted, but the moved one is shown refused only at destinations that
+    carry no backing metadata
+    (`Checks.BudgetPremise.mremap_budget_refused_refuses_move`).  Its fit
+    hypothesis and the protected ledger it reads are proved invariants
+    (`Checks.MapsFit`, `Checks.NoaccessOwned`); the lazy-ledger half is
+    not yet proved preserved.  On a state with empty lazy ledgers every
+    admitted outcome is a refusal
+    (`Checks.BudgetPremiseMremap.mremap_budget_refused_is_refusal_sys_inv`).
+    On a state that broke the lazy-ledger half, the mark could fire where
+    a move is still admitted, and under a forced-only configuration the
+    filter could drop the marked refusal as spurious; the marked
+    configuration is still reached, so the premise is unaffected. -/
 def reaches_budget_refused_cfg (segs : List Segment) (cfg : SpuriousCfg)
     (c0 : config) : Prop :=
   ∃ tr c, star_cfg segs cfg c0 tr c ∧ budget_refused_at segs c
@@ -2358,7 +2677,12 @@ def valid_brk (segs : List Segment) (brk : word) : Prop :=
     page-aligned address in `[State.mmap_base_min, State.mmap_base_max]`.  The
     floor is the smallest base any covered kernel's top-down layout computes
     and the cap the largest; both are derived from mm/util.c's `mmap_base` on
-    their own definitions.  Quantified independently per binary in
+    their own definitions, under two assumptions that module names: the
+    top-down layout, and `vm.mmap_rnd_bits` at most 24 or a
+    `stack_guard_gap` at most 0x4aba6a2ab000 bytes.
+    `Checks.Cases.MmapBase.sv48_band_is_linux_set` proves both inclusions
+    against a statement of that computation.  Quantified independently per
+    binary in
     `Equivalence.strong_universal_T`, like `valid_sp` and `valid_brk`.
 
     WHAT IS UNREAD IS THE VALUE, NOT THIS PREDICATE, and the difference
@@ -2373,10 +2697,14 @@ def valid_brk (segs : List Segment) (brk : word) : Prop :=
     and it is about this PREDICATE rather than about the field's value: no
     reader of the value exists in either tier.
 
-    The genuine residual: nothing in the tree can falsify the band's floor.
-    `State.mmap_base_min`'s value is read by no arm, and both proofs that
-    consume this predicate go through for a wide range of floors, so a wrong
-    one would not be caught here — see that constant's own note. -/
+    The band is now CHECKED, not merely derived:
+    `Checks.Cases.MmapBase.sv48_band_is_linux_set` proves it is exactly the
+    set of bases a launch under the configuration that module names gives,
+    so an error in either constant fails the build.  Outside the spec the
+    ASan plan checker (`Common.AsanInit`) takes this predicate as a
+    hypothesis and needs its floor; that is why the floor is not lowered
+    to drop the assumptions (see `State.mmap_base_min`). -/
+
 def valid_mmap_base (mbase : word) : Prop :=
   mmap_base_min ≤ (mbase.toNat : Int) ∧ (mbase.toNat : Int) ≤ mmap_base_max
   ∧ (mbase.toNat : Int) % page_size = 0
@@ -3480,3 +3808,126 @@ example : ¬ valid_mmap_base (BitVec.ofInt 64 0) := by
   unfold valid_mmap_base; decide
 
 end Sanity
+
+/- =========================================================================
+   The finer premise: budget refusals only, oversize ones not excluded
+   ========================================================================= -/
+
+/-- A refusal classified `.RefuseBudget` IS a refusal: the classifier
+    only names the cause. -/
+theorem refuse_reason_budget_implies_refused (i : SyscallInput) (m : Model)
+    (h : alloc_refuse_reason i m = some .RefuseBudget) :
+    alloc_budget_refused_b i m = true := by
+  unfold alloc_refuse_reason at h
+  by_cases hb : alloc_budget_refused_b i m = true
+  · exact hb
+  · rw [ite_eq_right hb] at h
+    exact absurd h (by simp)
+
+/-- `budget_refused_at` with the grant disjunct narrowed to
+    `alloc_refuse_reason i m = some .RefuseBudget`; the two first-touch
+    clauses are unchanged.  It implies `budget_refused_at`, so
+    `¬ run_budget_only_refused` admits every input
+    `¬ run_budget_refused` admits, and also those whose only refusal is
+    oversize — one request whose charge alone exceeds the whole budget. -/
+def budget_only_refused_at (segs : List Segment) (c : config) : Prop :=
+  m_halted c.cfg_model = none ∧
+  ( (c.cfg_ms.ms_svc_pending = none ∧
+     ∃ report,
+       step_accesses segs c.cfg_ms = .MachineOk report ∧
+       materialize_model_accesses c.cfg_model report.accessed_ranges = none)
+  ∨ (∃ x8, c.cfg_ms.ms_svc_pending = some x8 ∧
+       ( alloc_refuse_reason (sys_input segs c.cfg_ms x8) c.cfg_model = some .RefuseBudget
+       ∨ ∃ (eff : SyscallEffect) (model' : Model) (evs : List event),
+            Specs.syscall_spec (sys_input segs c.cfg_ms x8) c.cfg_model (.ok eff model' evs)
+            ∧ m_halted model' = none
+            ∧ materialize_model_accesses model' (syscall_effect_accesses eff) = none)) )
+
+theorem budget_only_refused_at_implies (segs : List Segment) (c : config)
+    (h : budget_only_refused_at segs c) : budget_refused_at segs c := by
+  obtain ⟨Hh, Hd⟩ := h
+  refine ⟨Hh, ?_⟩
+  rcases Hd with ⟨Hnone, report, hstep, hmat⟩ | ⟨x8, hsvc, h | h⟩
+  · exact Or.inl ⟨Hnone, report, hstep, hmat⟩
+  · exact Or.inr ⟨x8, hsvc, Or.inl (refuse_reason_budget_implies_refused _ _ h)⟩
+  · obtain ⟨eff, model', evs, hspec, hhalt, hmat⟩ := h
+    exact Or.inr ⟨x8, hsvc, Or.inr ⟨eff, model', evs, hspec, hhalt, hmat⟩⟩
+
+/-- The run can reach a configuration refused for budget only. -/
+def reaches_budget_only_refused (segs : List Segment) (c0 : config) : Prop :=
+  ∃ tr c, star segs c0 tr c ∧ budget_only_refused_at segs c
+
+theorem reaches_budget_only_refused_implies (segs : List Segment) (c0 : config)
+    (h : reaches_budget_only_refused segs c0) : reaches_budget_refused segs c0 := by
+  obtain ⟨tr, c, hstar, hb⟩ := h
+  exact ⟨tr, c, hstar, budget_only_refused_at_implies segs c hb⟩
+
+/-- The run-level form of the finer premise, the `match` of `run`.
+    `Equivalence.source_within_budget_only` negates it. -/
+def run_budget_only_refused (img : Image) (lim : Int) (en : ExecEntry)
+    (inp : ProcInput) : Prop :=
+  reaches_budget_only_refused img.img_segments
+    (init_config img.img_segments img.img_init_pc img.img_phdrs
+      en.en_sp en.en_brk en.en_mmap_base en.en_draw lim inp)
+
+theorem run_budget_only_refused_implies (img : Image) (lim : Int) (en : ExecEntry)
+    (inp : ProcInput) (h : run_budget_only_refused img lim en inp) :
+    run_budget_refused img lim en inp :=
+  reaches_budget_only_refused_implies _ _ h
+
+/-- The configured form, over `star_cfg`, beside
+    `reaches_budget_refused_cfg`.  The same lifts hold: to the configured
+    released mark, to the unfiltered finer mark (a configuration removes
+    executions and adds none), and the two agree at `may_fail_cfg`. -/
+def reaches_budget_only_refused_cfg (segs : List Segment) (cfg : SpuriousCfg)
+    (c0 : config) : Prop :=
+  ∃ tr c, star_cfg segs cfg c0 tr c ∧ budget_only_refused_at segs c
+
+theorem reaches_budget_only_refused_cfg_implies (segs : List Segment) (cfg : SpuriousCfg)
+    (c0 : config) (h : reaches_budget_only_refused_cfg segs cfg c0) :
+    reaches_budget_refused_cfg segs cfg c0 := by
+  obtain ⟨tr, c, hstar, hb⟩ := h
+  exact ⟨tr, c, hstar, budget_only_refused_at_implies segs c hb⟩
+
+theorem reaches_budget_only_refused_cfg_sub (segs : List Segment) (cfg : SpuriousCfg)
+    (c0 : config) (h : reaches_budget_only_refused_cfg segs cfg c0) :
+    reaches_budget_only_refused segs c0 := by
+  obtain ⟨tr, c, hstar, hb⟩ := h
+  exact ⟨tr, c, star_cfg_sub segs cfg _ _ _ hstar, hb⟩
+
+theorem reaches_budget_only_refused_cfg_may_fail (segs : List Segment) (c0 : config) :
+    reaches_budget_only_refused segs c0
+      ↔ reaches_budget_only_refused_cfg segs may_fail_cfg c0 := by
+  constructor
+  · rintro ⟨tr, c, hstar, hb⟩
+    exact ⟨tr, c, (star_cfg_may_fail segs _ _ _).mp hstar, hb⟩
+  · intro h
+    exact reaches_budget_only_refused_cfg_sub segs may_fail_cfg c0 h
+
+/-- The configured run's form of the finer premise, the `match` of
+    `run_scfg`. -/
+def run_scfg_budget_only_refused (cfg : SpuriousCfg) (img : Image) (lim : Int)
+    (en : ExecEntry) (inp : ProcInput) : Prop :=
+  reaches_budget_only_refused_cfg img.img_segments cfg
+    (init_config img.img_segments img.img_init_pc img.img_phdrs
+      en.en_sp en.en_brk en.en_mmap_base en.en_draw lim inp)
+
+theorem run_scfg_budget_only_refused_implies (cfg : SpuriousCfg) (img : Image)
+    (lim : Int) (en : ExecEntry) (inp : ProcInput)
+    (h : run_scfg_budget_only_refused cfg img lim en inp) :
+    run_scfg_budget_refused cfg img lim en inp :=
+  reaches_budget_only_refused_cfg_implies _ cfg _ h
+
+theorem run_scfg_budget_only_refused_sub (cfg : SpuriousCfg) (img : Image)
+    (lim : Int) (en : ExecEntry) (inp : ProcInput)
+    (h : run_scfg_budget_only_refused cfg img lim en inp) :
+    run_budget_only_refused img lim en inp :=
+  reaches_budget_only_refused_cfg_sub _ cfg _ h
+
+theorem run_scfg_budget_only_refused_may_fail (img : Image) (lim : Int)
+    (en : ExecEntry) (inp : ProcInput) :
+    run_budget_only_refused img lim en inp
+      ↔ run_scfg_budget_only_refused may_fail_cfg img lim en inp :=
+  reaches_budget_only_refused_cfg_may_fail _ _
+
+end LinuxSem.LinuxProcessSem.Run

@@ -186,6 +186,24 @@ def halts_allowed_T_scfg_budgets (cfg : SpuriousCfg) (lim : Int)
     source_within_budget_scfg cfg lim img en inp →
     must_exit_in_scfg cfg S img lim en inp
 
+/-- THE BUDGET READING UNDER THE FINER PREMISE.  The same statement with
+    `Equivalence.source_within_budget_scfg_only` in place of
+    `Equivalence.source_within_budget_scfg`: an input on which a single
+    request's charge alone exceeds `lim` (`Run.RefuseOversize`) stays in
+    scope, so the binary must still halt with an allowed status after
+    that request is refused.  The first-touch and the cumulative
+    refusals are still excluded.  With one image there is no agreement
+    part to keep under the released premise, so the whole conclusion
+    moves to the finer one; it implies the released reading
+    (`halts_allowed_T_scfg_budgets_only_subsumes`). -/
+def halts_allowed_T_scfg_budgets_only (cfg : SpuriousCfg) (lim : Int)
+    (S : List word) (img : Image) : Prop :=
+  ∀ en inp,
+    valid_entry img en inp →
+    valid_input inp →
+    source_within_budget_scfg_only cfg lim img en inp →
+    must_exit_in_scfg cfg S img lim en inp
+
 /- =========================================================================
    How the three readings relate
    ========================================================================= -/
@@ -230,6 +248,38 @@ theorem halts_allowed_T_scfg_budgets_of_scfg (cfg : SpuriousCfg)
     halts_allowed_T_scfg_budgets cfg source_alloc_limit S img := by
   intro en inp Hen Hinp _
   exact H en inp Hen Hinp
+
+/-- The finer budget reading implies the released one at the same
+    budget: the released premise implies the finer one. -/
+theorem halts_allowed_T_scfg_budgets_only_subsumes (cfg : SpuriousCfg) (lim : Int)
+    (S : List word) (img : Image)
+    (H : halts_allowed_T_scfg_budgets_only cfg lim S img) :
+    halts_allowed_T_scfg_budgets cfg lim S img := by
+  intro en inp Hen Hinp Hb
+  exact H en inp Hen Hinp
+    (source_within_budget_scfg_only_of_source_within_budget_scfg cfg lim img en inp Hb)
+
+/-- It is refuted by an error, or by a reachable death, on a valid pair
+    the finer premise admits. -/
+theorem halts_allowed_T_scfg_budgets_only_refuted_by_error (cfg : SpuriousCfg)
+    (lim : Int) (S : List word) (img : Image) (en : ExecEntry) (inp : ProcInput)
+    (Hen : valid_entry img en inp)
+    (Hinp : valid_input inp)
+    (Hb : source_within_budget_scfg_only cfg lim img en inp)
+    (Herr : bh_errors (run_scfg cfg img lim en inp)) :
+    ¬ halts_allowed_T_scfg_budgets_only cfg lim S img := by
+  intro H
+  exact must_exit_in_scfg_refuted_by_error cfg S img lim en inp Herr (H en inp Hen Hinp Hb)
+
+theorem halts_allowed_T_scfg_budgets_only_refuted_by_kill (cfg : SpuriousCfg)
+    (lim : Int) (S : List word) (img : Image) (en : ExecEntry) (inp : ProcInput)
+    (Hen : valid_entry img en inp)
+    (Hinp : valid_input inp)
+    (Hb : source_within_budget_scfg_only cfg lim img en inp)
+    (Hk : run_reaches_killed_cfg cfg img lim en inp) :
+    ¬ halts_allowed_T_scfg_budgets_only cfg lim S img := by
+  intro H
+  exact must_exit_in_scfg_refuted_by_kill cfg S img lim en inp Hk (H en inp Hen Hinp Hb)
 
 /-- Widening the allowed set weakens every reading.  Only this
     direction: a task that wants the narrower set has to prove it. -/

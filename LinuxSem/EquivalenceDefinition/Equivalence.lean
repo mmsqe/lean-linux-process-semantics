@@ -2173,7 +2173,15 @@ structure SPEC_ERROR_FREE_CFG (Cfg : ALLOC_CFG) (Source Target : MemImage) where
    flavour-pair tasks declare it per task; the per-triple predicates
    are `strong_equiv` / `strong_equiv_error_free` /
    `strong_equiv_error_free_abort` with the budgets abstracted, and
-   nothing else. -/
+   nothing else.
+
+   A FINER PREMISE sits beside it: `source_within_budget_only` excludes
+   only the inputs on which the source reaches a first-touch or a
+   cumulative refusal, not those on which one request alone is larger
+   than the whole budget, and the `_budgets_only` statements require the
+   source to be error-free on every input it admits, keeping
+   `source_within_budget` for the agreement with the target
+   (`Checks.OversizeReachable` shows both premises on runs). -/
 
 /-- THE PREMISE: the source run, under the source budget, never reaches
     a configuration where it is refused for exceeding that budget
@@ -2300,6 +2308,118 @@ theorem strong_universal_error_free_T_budgets_refuted_by_source_error
   intro H
   obtain ⟨Hsef, -, -⟩ := H en_s en_t inp Hsrc Htgt Hinp Hb
   exact Hsef Herr
+
+/-! ** The finer premise: oversize refusals not excluded
+
+    `source_within_budget` also excludes inputs on which one request's
+    charge alone exceeds the budget (`Run.RefuseOversize`), so a source
+    that aborts when such a request is refused can satisfy the released
+    statements.  `source_within_budget_only` negates
+    `Run.run_budget_only_refused`, which does not count those refusals.
+
+    The finer premise guards only the source's error-freedom.  The
+    agreement with the target keeps `source_within_budget`: with unequal
+    budgets the target may be granted a request the source is refused,
+    and the traces then differ for no defect of the program.  Each
+    statement implies its released twin (`_subsumes`). -/
+def source_within_budget_only (lim_source : Int) (source_image : Image)
+    (en_source : ExecEntry) (inp : ProcInput) : Prop :=
+  ¬ run_budget_only_refused source_image lim_source en_source inp
+
+theorem source_within_budget_only_of_source_within_budget
+    (lim_source : Int) (source_image : Image) (en_source : ExecEntry)
+    (inp : ProcInput) (h : source_within_budget lim_source source_image en_source inp) :
+    source_within_budget_only lim_source source_image en_source inp := by
+  intro hc
+  exact h (run_budget_only_refused_implies _ _ _ _ hc)
+
+def strong_universal_error_free_T_budgets_only (lim_source lim_target : Int)
+    (source_image target_image : Image) : Prop :=
+  ∀ en_source en_target inp,
+    valid_entry source_image en_source inp →
+    valid_entry target_image en_target inp →
+    valid_input inp →
+    source_within_budget_only lim_source source_image en_source inp →
+    error_free (run source_image lim_source en_source inp)
+    ∧ (source_within_budget lim_source source_image en_source inp →
+        strong_equiv_error_free_budgets lim_source lim_target source_image target_image
+          en_source en_target inp)
+
+theorem strong_universal_error_free_T_budgets_only_subsumes (lim_source lim_target : Int)
+    (source_image target_image : Image)
+    (H : strong_universal_error_free_T_budgets_only lim_source lim_target
+      source_image target_image) :
+    strong_universal_error_free_T_budgets lim_source lim_target source_image target_image := by
+  intro en_source en_target inp Hs Ht Hv Hb
+  exact (H en_source en_target inp Hs Ht Hv
+    (source_within_budget_only_of_source_within_budget _ _ _ _ Hb)).2 Hb
+
+theorem strong_universal_error_free_T_budgets_only_refuted_by_source_error
+    (lim_source lim_target : Int) (source_image target_image : Image)
+    (en_source en_target : ExecEntry) (inp : ProcInput)
+    (Hsrc : valid_entry source_image en_source inp)
+    (Htgt : valid_entry target_image en_target inp)
+    (Hinp : valid_input inp)
+    (Hb : source_within_budget_only lim_source source_image en_source inp)
+    (Herr : bh_errors (run source_image lim_source en_source inp)) :
+    ¬ strong_universal_error_free_T_budgets_only lim_source lim_target
+        source_image target_image := by
+  intro H
+  obtain ⟨Hsef, -⟩ := H en_source en_target inp Hsrc Htgt Hinp Hb
+  exact Hsef Herr
+
+/-- The abort-declared twin.  The source part asks `error_free_unkilled`,
+    as `strong_equiv_error_free_budgets_abort` does, so a source killed
+    after a refused oversize request refutes it. -/
+def strong_universal_error_free_T_budgets_only_abort (lim_source lim_target : Int)
+    (source_image target_image : Image) : Prop :=
+  ∀ en_source en_target inp,
+    valid_entry source_image en_source inp →
+    valid_entry target_image en_target inp →
+    valid_input_abort inp →
+    source_within_budget_only lim_source source_image en_source inp →
+    error_free_unkilled (run source_image lim_source en_source inp)
+    ∧ (source_within_budget lim_source source_image en_source inp →
+        strong_equiv_error_free_budgets_abort lim_source lim_target source_image target_image
+          en_source en_target inp)
+
+theorem strong_universal_error_free_T_budgets_only_abort_subsumes
+    (lim_source lim_target : Int) (source_image target_image : Image)
+    (H : strong_universal_error_free_T_budgets_only_abort lim_source lim_target
+      source_image target_image) :
+    strong_universal_error_free_T_budgets_abort lim_source lim_target
+      source_image target_image := by
+  intro en_source en_target inp Hs Ht Hv Hb
+  exact (H en_source en_target inp Hs Ht Hv
+    (source_within_budget_only_of_source_within_budget _ _ _ _ Hb)).2 Hb
+
+theorem strong_universal_error_free_T_budgets_only_abort_refuted_by_source_error
+    (lim_source lim_target : Int) (source_image target_image : Image)
+    (en_source en_target : ExecEntry) (inp : ProcInput)
+    (Hsrc : valid_entry source_image en_source inp)
+    (Htgt : valid_entry target_image en_target inp)
+    (Hinp : valid_input_abort inp)
+    (Hb : source_within_budget_only lim_source source_image en_source inp)
+    (Herr : bh_errors (run source_image lim_source en_source inp)) :
+    ¬ strong_universal_error_free_T_budgets_only_abort lim_source lim_target
+        source_image target_image := by
+  intro H
+  obtain ⟨⟨Hsef, -⟩, -⟩ := H en_source en_target inp Hsrc Htgt Hinp Hb
+  exact Hsef Herr
+
+theorem strong_universal_error_free_T_budgets_only_abort_refuted_by_abort
+    (lim_source lim_target : Int) (source_image target_image : Image)
+    (en_source en_target : ExecEntry) (inp : ProcInput)
+    (Hsrc : valid_entry source_image en_source inp)
+    (Htgt : valid_entry target_image en_target inp)
+    (Hinp : valid_input_abort inp)
+    (Hb : source_within_budget_only lim_source source_image en_source inp)
+    (Hdies : dies_by_signal (run source_image lim_source en_source inp)) :
+    ¬ strong_universal_error_free_T_budgets_only_abort lim_source lim_target
+        source_image target_image := by
+  intro H
+  obtain ⟨⟨-, Hno⟩, -⟩ := H en_source en_target inp Hsrc Htgt Hinp Hb
+  exact Hno Hdies
 
 /- ** The declared capability word, in the two UNCONFIGURED budget cells
 
@@ -2901,6 +3021,117 @@ theorem strong_universal_error_free_T_scfg_budgets_abort_refuted_by_abort
     ¬ strong_universal_error_free_T_scfg_budgets_abort cfg ls lt s t := by
   intro H
   obtain ⟨⟨-, Hno⟩, -, -⟩ := H en_s en_t inp Hsrc Htgt Hinp Hb
+  exact Hno Hdies
+
+/- -------------------------------------------------------------------------
+   The finer premise, under a configuration
+   ------------------------------------------------------------------------- -/
+
+/-- The `_budgets` finer premise over the configured run:
+    `source_within_budget_scfg_only` negates
+    `Run.run_scfg_budget_only_refused`, which counts the first-touch and
+    the cumulative grant refusals (`Run.RefuseBudget`) the configured run
+    reaches and not the oversize ones.  It is implied by the configured
+    released premise and by the unfiltered finer one.  The statements
+    have the same two-part shape as the unfiltered block: the finer
+    premise guards the source's own error-freedom (and unkilledness,
+    under the abort declaration), and the agreement with the target
+    keeps `source_within_budget_scfg`. -/
+def source_within_budget_scfg_only (cfg : SpuriousCfg) (lim_source : Int)
+    (source_image : Image) (en_source : ExecEntry) (inp : ProcInput) : Prop :=
+  ¬ run_scfg_budget_only_refused cfg source_image lim_source en_source inp
+
+theorem source_within_budget_scfg_only_of_source_within_budget_scfg
+    (cfg : SpuriousCfg) (lim_source : Int) (source_image : Image)
+    (en_source : ExecEntry) (inp : ProcInput)
+    (h : source_within_budget_scfg cfg lim_source source_image en_source inp) :
+    source_within_budget_scfg_only cfg lim_source source_image en_source inp := by
+  intro hc
+  exact h (run_scfg_budget_only_refused_implies _ _ _ _ _ hc)
+
+theorem source_within_budget_scfg_only_of_source_within_budget_only
+    (cfg : SpuriousCfg) (lim_source : Int) (source_image : Image)
+    (en_source : ExecEntry) (inp : ProcInput)
+    (h : source_within_budget_only lim_source source_image en_source inp) :
+    source_within_budget_scfg_only cfg lim_source source_image en_source inp := by
+  intro hc
+  exact h (run_scfg_budget_only_refused_sub _ _ _ _ _ hc)
+
+def strong_universal_error_free_T_scfg_budgets_only (cfg : SpuriousCfg)
+    (ls lt : Int) (s t : Image) : Prop :=
+  ∀ en_source en_target inp,
+    valid_entry s en_source inp →
+    valid_entry t en_target inp →
+    valid_input inp →
+    source_within_budget_scfg_only cfg ls s en_source inp →
+    error_free (run_scfg cfg s ls en_source inp)
+    ∧ (source_within_budget_scfg cfg ls s en_source inp →
+        strong_equiv_error_free_budgets_scfg cfg ls lt s t en_source en_target inp)
+
+theorem strong_universal_error_free_T_scfg_budgets_only_subsumes
+    (cfg : SpuriousCfg) (ls lt : Int) (s t : Image)
+    (H : strong_universal_error_free_T_scfg_budgets_only cfg ls lt s t) :
+    strong_universal_error_free_T_scfg_budgets cfg ls lt s t := by
+  intro en_source en_target inp Hs Ht Hv Hb
+  exact (H en_source en_target inp Hs Ht Hv
+    (source_within_budget_scfg_only_of_source_within_budget_scfg _ _ _ _ _ Hb)).2 Hb
+
+theorem strong_universal_error_free_T_scfg_budgets_only_refuted_by_source_error
+    (cfg : SpuriousCfg) (ls lt : Int) (s t : Image)
+    (en_source en_target : ExecEntry) (inp : ProcInput)
+    (Hsrc : valid_entry s en_source inp)
+    (Htgt : valid_entry t en_target inp)
+    (Hinp : valid_input inp)
+    (Hb : source_within_budget_scfg_only cfg ls s en_source inp)
+    (Herr : bh_errors (run_scfg cfg s ls en_source inp)) :
+    ¬ strong_universal_error_free_T_scfg_budgets_only cfg ls lt s t := by
+  intro H
+  obtain ⟨Hsef, -⟩ := H en_source en_target inp Hsrc Htgt Hinp Hb
+  exact Hsef Herr
+
+def strong_universal_error_free_T_scfg_budgets_only_abort (cfg : SpuriousCfg)
+    (ls lt : Int) (s t : Image) : Prop :=
+  ∀ en_source en_target inp,
+    valid_entry s en_source inp →
+    valid_entry t en_target inp →
+    valid_input_abort inp →
+    source_within_budget_scfg_only cfg ls s en_source inp →
+    error_free_unkilled (run_scfg cfg s ls en_source inp)
+    ∧ (source_within_budget_scfg cfg ls s en_source inp →
+        strong_equiv_error_free_budgets_scfg_abort cfg ls lt s t en_source en_target inp)
+
+theorem strong_universal_error_free_T_scfg_budgets_only_abort_subsumes
+    (cfg : SpuriousCfg) (ls lt : Int) (s t : Image)
+    (H : strong_universal_error_free_T_scfg_budgets_only_abort cfg ls lt s t) :
+    strong_universal_error_free_T_scfg_budgets_abort cfg ls lt s t := by
+  intro en_source en_target inp Hs Ht Hv Hb
+  exact (H en_source en_target inp Hs Ht Hv
+    (source_within_budget_scfg_only_of_source_within_budget_scfg _ _ _ _ _ Hb)).2 Hb
+
+theorem strong_universal_error_free_T_scfg_budgets_only_abort_refuted_by_source_error
+    (cfg : SpuriousCfg) (ls lt : Int) (s t : Image)
+    (en_source en_target : ExecEntry) (inp : ProcInput)
+    (Hsrc : valid_entry s en_source inp)
+    (Htgt : valid_entry t en_target inp)
+    (Hinp : valid_input_abort inp)
+    (Hb : source_within_budget_scfg_only cfg ls s en_source inp)
+    (Herr : bh_errors (run_scfg cfg s ls en_source inp)) :
+    ¬ strong_universal_error_free_T_scfg_budgets_only_abort cfg ls lt s t := by
+  intro H
+  obtain ⟨⟨Hsef, -⟩, -⟩ := H en_source en_target inp Hsrc Htgt Hinp Hb
+  exact Hsef Herr
+
+theorem strong_universal_error_free_T_scfg_budgets_only_abort_refuted_by_abort
+    (cfg : SpuriousCfg) (ls lt : Int) (s t : Image)
+    (en_source en_target : ExecEntry) (inp : ProcInput)
+    (Hsrc : valid_entry s en_source inp)
+    (Htgt : valid_entry t en_target inp)
+    (Hinp : valid_input_abort inp)
+    (Hb : source_within_budget_scfg_only cfg ls s en_source inp)
+    (Hdies : dies_by_signal (run_scfg cfg s ls en_source inp)) :
+    ¬ strong_universal_error_free_T_scfg_budgets_only_abort cfg ls lt s t := by
+  intro H
+  obtain ⟨⟨-, Hno⟩, -⟩ := H en_source en_target inp Hsrc Htgt Hinp Hb
   exact Hno Hdies
 
 /- ** The declared capability word, in this cell
