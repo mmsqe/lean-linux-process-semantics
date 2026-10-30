@@ -1,9 +1,11 @@
 /-
   * Decode: the 32-bit RV64IMAFD_Zicsr_Zifencei decoder.
 
-  `decode w = none` means "not a valid 32-bit instruction"; the intent
-  is to match binutils objdump byte-for-byte (policy notes for a
-  comparison with objdump are flagged inline).
+  `decode w = none` means "not a valid 32-bit instruction".  What counts
+  as valid is the RISC-V specification (RV64GC) and QEMU user mode, the
+  references this tree names for instructions.  binutils objdump is
+  narrower in places; those cases are flagged inline as policy notes for
+  a comparison with objdump.
 
   Immediates are kept at their encoded width, sign bit included
   (see Instr.lean); no sign extension happens here.
@@ -138,23 +140,29 @@ def decode (w : BitVec 32) : Option Instr :=
       | 0x01, 6 => ml .REM   | 0x01, 7 => ml .REMU
       | _, _ => none
   | 0x0F =>
-      -- MISC-MEM.  Empirically (binutils 2.4x objdump, rv64):
-      --   - fence requires rd = rs1 = 0, and either fm = 0 (any
-      --     pred/succ, 0 printing as "unknown") or the exact
-      --     fm=8, pred=succ=rw combination (printed fence.tso);
-      --     all other fm/field combinations are rejected.
-      --   - fence.i decodes only as the exact word 0x0000100f.
+      -- MISC-MEM.  The unprivileged spec reserves fence's rd and
+      -- rs1 fields and says base implementations SHALL IGNORE
+      -- them, and that reserved fm and predecessor/successor
+      -- settings are to be treated as a fence with fm = 0000
+      -- (src/unpriv/rv32.adoc, norm:fence_unused_flds_rsv);
+      -- Zifencei says the same of fence.i's funct12, rs1 and rd
+      -- (src/unpriv/zifencei.adoc, norm:fence-i_rsv).  QEMU user
+      -- mode decodes both that way (target/riscv/insn32.decode:
+      -- "fence  ---- pred:4 succ:4 ----- 000 ----- 0001111" and
+      -- "fence_i  ---- ---- ---- ----- 001 ----- 0001111").  The
+      -- fields are kept raw; `Sem.exec` runs every fence as a
+      -- no-op (one hart), which is what "treat as fm = 0000"
+      -- gives here.
+      -- POLICY: binutils 2.4x objdump is narrower — it wants
+      -- rd = rs1 = 0 and either fm = 0 (any pred/succ, 0 printing
+      -- as "unknown") or the exact fm=8, pred=succ=rw word
+      -- (fence.tso), and it takes fence.i only as 0x0000100f.  A
+      -- comparison with objdump must special-case the words it
+      -- rejects.
       match f3 with
-      | 0 =>
-          if rd.toNat = 0
-             && rs1.toNat = 0
-             && ((bits 28 4 w).toNat = 0
-                 || (bits 20 12 w).toNat = 0x833)
-          then some (.fence (bits 28 4 w) (bits 24 4 w) (bits 20 4 w) rd rs1)
-          else none
-      | 1 =>
-          if w.toNat = 0x0000100F then some (.fenceI rd rs1 (immI w)) else none
-      | _ => none
+      | 0 => some (.fence (bits 28 4 w) (bits 24 4 w) (bits 20 4 w) rd rs1)
+      | 1 => some (.fenceI rd rs1 (immI w))
+      | _ => none  -- funct3 = 2 (Zicbom/Zicboz) is out of scope
   | 0x73 =>
       -- SYSTEM
       match f3 with
@@ -276,18 +284,22 @@ def decode (w : BitVec 32) : Option Instr :=
           match cvtInt with
           | some src => some (.fcvt .S src rd rs1 rm) | none => none
       | 0x69 =>
-          -- fcvt.d.{w,wu,l,lu}.  fcvt.d.w/fcvt.d.wu are exact
-          -- (every int32 is representable in double): binutils
-          -- masks rm to 0 and rejects rm <> 0 (confirmed
-          -- empirically: 0xd205c553 is invalid to objdump).
-          -- fcvt.d.l/fcvt.d.lu round, so rm is free.
+          -- fcvt.d.{w,wu,l,lu}.  fcvt.d.w/fcvt.d.wu are exact, but
+          -- the spec still decodes rm as usual: "Some instructions,
+          -- including widening conversions, have the rm field but
+          -- are nevertheless mathematically unaffected by the
+          -- rounding mode; software should set their rm field to
+          -- RNE (000) but implementations must treat the rm field
+          -- as usual (in particular, with regard to decoding legal
+          -- vs. reserved encodings)" (src/unpriv/f-st-ext.adoc,
+          -- norm:roundingmode_unaffected_rm_decode).  QEMU decodes
+          -- all four with a free rm (insn32.decode @r2_rm).  The
+          -- reserved modes 5/6 are rejected by `Sem.exec`, not
+          -- here.
+          -- POLICY: binutils objdump is narrower — it rejects
+          -- rm <> 0 on fcvt.d.w/fcvt.d.wu (0xd205c553 is invalid
+          -- to objdump); a comparison must special-case it.
           match cvtInt with
-          | some FcvtTy.W | some FcvtTy.WU =>
-              if f3 = 0 then
-                match cvtInt with
-                | some src => some (.fcvt .D src rd rs1 rm)
-                | none => none
-              else none
           | some src => some (.fcvt .D src rd rs1 rm)
           | none => none
       | 0x20 =>
@@ -295,9 +307,13 @@ def decode (w : BitVec 32) : Option Instr :=
           if rs2.toNat = 1 then some (.fcvt .S .D rd rs1 rm) else none
       | 0x21 =>
           -- fcvt.d.s (rs2 = 0); rs2 = 1 would be fcvt.d.d: illegal.
-          -- The conversion is exact, so binutils masks rm to 0
-          -- and rejects rm <> 0 (confirmed: 0x4205c553 invalid).
-          if rs2.toNat = 0 && f3 = 0 then some (.fcvt .D .S rd rs1 rm) else none
+          -- The conversion is exact, and rm is decoded as usual for
+          -- a widening conversion (same spec rule as 0x69 above);
+          -- QEMU: @r2_rm.
+          -- POLICY: binutils objdump rejects rm <> 0 here
+          -- (0x4205c553 invalid) — special-case it in a
+          -- comparison.
+          if rs2.toNat = 0 then some (.fcvt .D .S rd rs1 rm) else none
       | 0x70 =>
           -- fmv.x.w (f3 = 0) / fclass.s (f3 = 1); rs2 must be 0
           if rs2.toNat = 0 then

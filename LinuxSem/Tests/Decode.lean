@@ -33,10 +33,14 @@ example : decode 0x0ff0000f = some (.fence 0 15 15 0 0) := by decide
 example : decode 0x8330000f = some (.fence 8 3 3 0 0) := by decide
 example : decode 0x0000100f = some (.fenceI 0 0 0) := by decide
 
--- binutils rejects fence/fence.i with nonzero reserved fields
-example : decode 0x00a0100f = none := by decide
-example : decode 0x0ff0080f = none := by decide
-example : decode 0x8120000f = none := by decide
+-- The fields the spec tells an implementation to ignore: fence, fence.i
+-- and the exact fcvt forms decode whatever those fields hold.  binutils
+-- objdump rejects all seven words below; QEMU executes them.
+example : decode 0x0ff0008f = some (.fence 0 15 15 1 0) := by decide
+example : decode 0x0ff0080f = some (.fence 0 15 15 16 0) := by decide
+example : decode 0x8120000f = some (.fence 8 1 2 0 0) := by decide
+example : decode 0x0010100f = some (.fenceI 0 0 1) := by decide
+example : decode 0x00a0100f = some (.fenceI 0 0 10) := by decide
 
 example : decode 0x341022f3 = some (.csr .RS 5 0 0x341) := by decide
 
@@ -45,6 +49,11 @@ example : decode 0x00c58553 = some (.fari .ADD .S 10 11 12 0) := by decide
 -- fcvt.s.s / fcvt.d.d are illegal
 example : decode 0x40058553 = none := by decide
 example : decode 0x42158553 = none := by decide
+
+-- ...but a widening conversion decodes with a free rm (spec: "implementations
+-- must treat the rm field as usual"); binutils rejects both words below
+example : decode 0xd2001053 = some (.fcvt .D .W 0 0 1) := by decide
+example : decode 0x4201f553 = some (.fcvt .D .S 10 3 7) := by decide
 
 -- Low 2 bits <> 11: never a valid 32-bit instruction
 example : decode 0x00000001 = none := by decide
@@ -65,6 +74,12 @@ example : decode16 0xe022 = some (.cSdsp 8 0) := by decide
 example : decode16 0x6505 = some (.cLui 10 1) := by decide
 example : expandC (.cLui 10 1) = .lui 10 1 := by decide
 example : decode16 0x7139 = some (.cAddi16sp (BitVec.ofInt 10 (-64))) := by decide
+
+-- c.addi16sp with nzimm = 0 is reserved (QEMU traps it)
+example : decode16 0x6101 = none := by decide
+-- ...but a nonzero nzimm still decodes, with bit 12 clear or set
+example : decode16 0x6141 = some (.cAddi16sp (BitVec.ofInt 10 16)) := by decide
+example : decode16 0x7101 = some (.cAddi16sp (BitVec.ofInt 10 (-512))) := by decide
 
 -- Low bits 11: not a compressed instruction
 example : decode16 0x0013 = none := by decide
