@@ -1239,8 +1239,9 @@ theorem readv_directory_import_range_fault_beats_eisdir :
     the base load faults first.  Here the first entry's base bytes
     (8192..8199) are absent and its length bytes hold 2^63.  Reachable
     on a real kernel through a page-granular hole with the array
-    straddling the boundary.  The copy-in ledger is the one attempted
-    descriptor. -/
+    straddling the boundary.  The copy-in ledger is the length field
+    alone, 8200..8207: `iov_len` is loaded first, and the fault on
+    `iov_base` ends the copy. -/
 def mem_readv_len_only : word → Option byte :=
   fun a =>
     if bv_leu 8200 a && bv_ltu a 8224 then
@@ -1249,7 +1250,7 @@ def mem_readv_len_only : word → Option byte :=
     else none
 
 theorem readv_unreadable_base_faults_before_the_sign_test :
-  import_iovecs_accesses mem_readv_len_only 8192 2 = [(8192, 16)]
+  import_iovecs_accesses mem_readv_len_only 8192 2 = [(8200, 8)]
   ∧ check_syscall (SyscallInput.mkInput 65 [0, 8192, 2, 0, 0, 0] mem_readv_len_only (fun _ => none))
        (with_copyins (import_iovecs_accesses mem_readv_len_only 8192 2)
           (mkEffect (errno_ret EFAULT) [] []))
@@ -1260,6 +1261,71 @@ theorem readv_unreadable_base_faults_before_the_sign_test :
           (mkEffect (errno_ret EINVAL) [] []))
        (init_model [] 0 0 demo_sp demo_limit (demo_input [] IEof))
      = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! A DESCRIPTOR WHOSE LENGTH FAULTS WAS NOT READ.  [copy_iovec_from_user]
+    loads [iov_len] before [iov_base] (lib/iov_iter.c:1272-1273,
+    v6.18.46), and a fault leaves at once.  Here the descriptor at 69624
+    straddles a page boundary: its [iov_base] bytes, 69624..69631, end a
+    MAP_NORESERVE page that nothing has touched, so they read as zero,
+    and its [iov_len] bytes, 69632..69639, are unmapped.  Linux returns
+    -EFAULT having read nothing, so the ledger is empty on each path:
+    readv at a count of 2 ([copy_iovecs_aux]) and of 1
+    ([__import_iovec_ubuf]), and [copy_iovecs_accesses] as
+    [Net.Socket.sendmsg_spec] calls it.  The empty ledger charges no
+    backing; the whole-descriptor range [(69624, 16)] would charge the
+    lazy page for a read Linux did not make.  The two [check_syscall]
+    conjuncts pin the ledger readv answers with. -/
+def iov_len_fault_model : Model :=
+  vm_add_lazy 65536 4096
+    (with_vmmaps (mkVmMaps [] [(65536, 4096)] 0 0 4096)
+       (init_model [] 0 0 demo_sp 4096 (demo_input [] IEof)))
+
+def mem_iov_base_only : word → Option byte :=
+  fun a =>
+    if bv_leu 69624 a && bv_ltu a 69632
+    then nth_error (word_le8 0) (Int.toNat (bv_unsigned a - 69624))
+    else none
+
+theorem readv_iov_len_fault_reads_nothing :
+  import_iovecs mem_iov_base_only 69624 2 = iov_import.ImpFault
+  ∧ import_iovecs_accesses mem_iov_base_only 69624 2 = []
+  ∧ import_iovecs mem_iov_base_only 69624 1 = iov_import.ImpFault
+  ∧ import_iovecs_accesses mem_iov_base_only 69624 1 = []
+  ∧ copy_iovecs_aux mem_iov_base_only 69624 1 = iov_import.ImpFault
+  ∧ copy_iovecs_accesses mem_iov_base_only 69624 1 = []
+  ∧ vm_backing_used iov_len_fault_model = 0
+  ∧ materialize_model_accesses iov_len_fault_model
+       (import_iovecs_accesses mem_iov_base_only 69624 2)
+     = some iov_len_fault_model
+  ∧ (materialize_model_accesses iov_len_fault_model [(69624, 16)]).map vm_backing_used
+     = some 4096
+  ∧ check_syscall (SyscallInput.mkInput 65 [0, 69624, 2, 0, 0, 0] mem_iov_base_only (fun _ => none))
+       (with_copyins [] (mkEffect (errno_ret EFAULT) [] []))
+       iov_len_fault_model
+     = check_result.CheckOk iov_len_fault_model []
+  ∧ check_syscall (SyscallInput.mkInput 65 [0, 69624, 2, 0, 0, 0] mem_iov_base_only (fun _ => none))
+       (with_copyins [(69624, 16)] (mkEffect (errno_ret EFAULT) [] []))
+       iov_len_fault_model
+     = check_result.CheckReject
+:= by (try dsimp only); (repeat constructor) <;> rfl
+
+/-! The other side of the same boundary: [iov_len], 69632..69639, is
+    readable and [iov_base], 69624..69631, is not.  The length was read
+    before the base faulted, so the ledger is those 8 bytes, at a count
+    of 2 and at a count of 1. -/
+def mem_iov_len_only : word → Option byte :=
+  fun a =>
+    if bv_leu 69632 a && bv_ltu a 69640
+    then nth_error (word_le8 1) (Int.toNat (bv_unsigned a - 69632))
+    else none
+
+theorem readv_iov_base_fault_records_the_length :
+  import_iovecs mem_iov_len_only 69624 2 = iov_import.ImpFault
+  ∧ import_iovecs_accesses mem_iov_len_only 69624 2 = [(69632, 8)]
+  ∧ import_iovecs mem_iov_len_only 69624 1 = iov_import.ImpFault
+  ∧ import_iovecs_accesses mem_iov_len_only 69624 1 = [(69632, 8)]
+  ∧ copy_iovecs_accesses mem_iov_len_only 69624 1 = [(69632, 8)]
 := by (try dsimp only); (repeat constructor) <;> rfl
 
 /-! [rw_verify_area]'s position test (fs/read_write.c, v6.18.46): a
