@@ -481,6 +481,14 @@ def fp_mul (f : format) (md : rmode) (a b : Int) : Int × fflags :=
         enc f (round_exact f md (Bool.xor sa sb) (ma * mb) (ea + eb))
     | _, _ => (fp_canonical_nan f, no_flags)  -- unreachable: NaNs handled above
 
+/-- An exponent range for the division core wide enough that no
+    quotient of two finite operands reaches its floor.  The smallest
+    exponent `SFdivCoreBinary` asks for is
+    `4 - 2 * emax - 2 * prec` (a one-bit subnormal over the largest
+    finite value), and with this `emax` the core's own minimum exponent
+    is `3 - 2 * emax - 2 * prec`, one below it. -/
+def divCoreEmax (f : format) : Int := 2 * fp_emax f + fp_prec f
+
 def fp_div (f : format) (md : rmode) (a b : Int) : Int × fflags :=
   match nan_pass2 f a b with
   | some r => r
@@ -494,8 +502,18 @@ def fp_div (f : format) (md : rmode) (a b : Int) : Int × fflags :=
     -- finite nonzero / zero: the only divide-by-zero there is
     | x, .zero sb => (fp_encode f (.infinity (Bool.xor (sf_sign x) sb)), dz_flag)
     | .finite sa ma ea, .finite sb mb eb =>
+        -- The core runs over `divCoreEmax`, so the quotient keeps `prec`
+        -- significant bits even when it is subnormal.  The value does
+        -- not change: `round_aux` still rounds onto the format's own
+        -- grid.  The flags do: with `fp_emax f` the core truncates a
+        -- subnormal quotient to the subnormal grid already, and
+        -- `round_tiny` then rounds that, not the exact quotient.  A
+        -- quotient in the last gap below the smallest normal that
+        -- rounds up to it under the format's range, but stays below it
+        -- with the range unbounded, would lose its UF flag
+        -- (`fpDivTinyCarriesToNormalUF` in FpuTests).
         let (mz, ez, lz) :=
-          SFdivCoreBinary (fp_prec f) (fp_emax f) ((ma : Int)) ea ((mb : Int)) eb
+          SFdivCoreBinary (fp_prec f) (divCoreEmax f) ((ma : Int)) ea ((mb : Int)) eb
         enc f (round_aux f md (Bool.xor sa sb) mz ez lz)
     | _, _ => (fp_canonical_nan f, no_flags)  -- unreachable
 

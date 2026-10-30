@@ -220,6 +220,29 @@ theorem not_tiny_at_unbounded_range_no_uf :
     fp_mul D .RNE 0x1ffffffffc000000 0x2000000002000000
     = (0x0010000000000000, nx_flag) := by decide
 
+/-- The same boundary for a QUOTIENT.  (2^-1021 - 2^-1074) / 2 is
+    2^-1022 - 2^-1075 again, the midpoint of the last subnormal gap, so
+    the division must flag it exactly as the product above: UF and NX
+    under RNE, where the delivered result carries up to the smallest
+    normal, and under RTZ, where it stays subnormal.  The single and RUP
+    forms are the same case: 2^-126 / (1 + 2^-23) lies in the last gap
+    and RUP delivers 2^-126. -/
+theorem div_tiny_carries_to_normal_uf :
+    fp_div D .RNE 0x001fffffffffffff 0x4000000000000000
+    = (0x0010000000000000, Fflags false false false true true) := by decide
+theorem div_tiny_stays_subnormal_uf :
+    fp_div D .RTZ 0x001fffffffffffff 0x4000000000000000
+    = (0x000fffffffffffff, Fflags false false false true true) := by decide
+theorem div_tiny_carries_to_normal_uf_s_rup :
+    fp_div fmt_single .RUP 0x00800000 0x3f800001
+    = (0x00800000, Fflags false false false true true) := by decide
+
+/-- The negative quotient under RDN, which rounds the magnitude up: the
+    sign path of the same carry to the smallest normal. -/
+theorem div_tiny_carries_to_normal_uf_neg_rdn :
+    fp_div D .RDN 0x801fffffffffffff 0x4000000000000000
+    = (0x8010000000000000, Fflags false false false true true) := by decide
+
 /-- The directed-rounding shape of the same boundary, in single
     precision (fmsub.s / fmsub.d under RDN).  RDN on a NEGATIVE
     result rounds the magnitude up, so an exact fused result in the
