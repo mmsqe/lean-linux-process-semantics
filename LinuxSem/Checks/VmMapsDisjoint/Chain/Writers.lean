@@ -304,164 +304,169 @@ theorem check_mremap_preserves (old old_size new_size flags : word) (eff : Sysca
         rw [check_ret_only_model (m' := m') (evs := evs) (H := H)]
         exact Hwf
       · rw [ite_eq_right hnew] at H
-        by_cases hold : page_align_is0_b old_size = true
-        · rw [ite_eq_left hold] at H
-          exact nomatch H
-        · rw [ite_eq_right hold] at H
-          -- the two roundings, as the soundness walk names them
-          have hnewP := page_align_is0_false_parts new_size hnew
-          have holdP := page_align_is0_false_parts old_size hold
-          have hnewPos : 0 < page_round_up_Z (new_size.toNat : Int) := by
-            apply page_round_up_pos
-            have h := w_is0_false new_size hnewP.1
-            simp only [bv_unsigned_def] at h
-            omega
-          have holdPos : 0 < page_round_up_Z (old_size.toNat : Int) := by
-            apply page_round_up_pos
-            have h := w_is0_false old_size holdP.1
-            simp only [bv_unsigned_def] at h
-            omega
-          generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H
-          generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H
-          generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H
-          generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H
-          have hold_lt : old_nZ < two_pow_64 := by rw [← hOldN]; exact holdP.2
-          have hnew_lt : new_nZ < two_pow_64 := by rw [← hNewN]; exact hnewP.2
-          have hold_nn : 0 ≤ old_nZ := by
-            rw [← hOldN]
-            have := page_round_up_Z_ge (old_size.toNat : Int) (by omega)
-            omega
-          have hnew_nn : 0 ≤ new_nZ := by
-            rw [← hNewN]
-            have := page_round_up_Z_ge (new_size.toNat : Int) (by omega)
-            omega
-          have holdv : bv_unsigned old_n = old_nZ := by
-            rw [← hOldW]
-            exact u64 old_nZ ⟨hold_nn, hold_lt⟩
-          have hnewv : bv_unsigned new_n = new_nZ := by
-            rw [← hNewW]
-            exact u64 new_nZ ⟨hnew_nn, hnew_lt⟩
-          by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-              mremap_backing_uniform_b m old old_n)) = true
-          · rw [ite_eq_left hsrc] at H
+        by_cases htask : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · rw [ite_eq_left htask] at H
+          rw [check_ret_only_model (m' := m') (evs := evs) (H := H)]
+          exact Hwf
+        · rw [ite_eq_right htask] at H
+          by_cases hold : page_align_is0_b old_size = true
+          · rw [ite_eq_left hold] at H
             exact nomatch H
-          · rw [ite_eq_right hsrc] at H
-            by_cases heq : (old_nZ == new_nZ) = true
-            · rw [ite_eq_left heq] at H
-              rw [check_ret_only_model (m' := m') (evs := evs) (H := H)]
-              exact Hwf
-            · rw [ite_eq_right heq] at H
-              obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
-              cases ws <;> cases copyins <;> try dsimp only at H
-              · by_cases herr : errno_ret_in mremap_errnos r = true
-                · rw [ite_eq_left herr] at H
-                  cases zs <;> cases us <;> cases cs <;> try dsimp only at H
-                  · simp only [check_result.CheckOk.injEq] at H
-                    obtain ⟨hm, hevs⟩ := H
-                    rw [hm.symm]
-                    exact Hwf
-                  all_goals (exact nomatch H)
-                · rw [ite_eq_right herr] at H
-                  by_cases hret : bv_eqb r old = true
-                  · rw [ite_eq_left hret] at H
-                    by_cases hlt : new_nZ < old_nZ
-                    · rw [ite_eq_left hlt] at H
-                      by_cases hshrink : (listNN_eqb zs [] &&
-                          listNN_eqb us
-                            [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
-                          listCopy_eqb cs []) = true
-                      · rw [ite_eq_left hshrink] at H
-                        simp only [check_result.CheckOk.injEq] at H
-                        obtain ⟨hm, hevs⟩ := H
-                        rw [hm.symm]
-                        -- THE SHRINK: the source entry is replaced by a
-                        -- shorter one at the same base (`maps_wf_cons_sub`)
-                        have hbb : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-                            mremap_backing_uniform_b m old old_n) = true := by
-                          cases hb : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-                              mremap_backing_uniform_b m old old_n)
-                          · rw [hb] at hsrc
-                            simp at hsrc
-                          · rfl
-                        have hsrcb : mremap_source_b (m_vmmaps m) old old_n old_nZ = true :=
-                          (Bool.and_eq_true ..).mp hbb |>.1
-                        unfold mremap_source_b at hsrcb
-                        simp only [Bool.and_eq_true, decide_eq_true_eq] at hsrcb
-                        have hhas : map_has (vm_maps (m_vmmaps m)) old old_n = true := hsrcb.1.2
-                        have Hin : (old, old_n) ∈ vm_maps (m_vmmaps m) :=
-                          map_has_In _ old old_n hhas
-                        have hnz : bv_unsigned new_n ≠ 0 := by
-                          rw [hnewv]
-                          omega
-                        have hle : bv_unsigned new_n ≤ bv_unsigned old_n := by
-                          rw [hnewv, holdv]
-                          omega
-                        rw [vmm_mremap_next]
-                        exact maps_wf_cons_sub (vm_maps (m_vmmaps m)) old old_n new_n
-                          Hwf hnz Hin hle
-                      · rw [ite_eq_right hshrink] at H
-                        exact nomatch H
-                    · rw [ite_eq_right hlt] at H
-                      by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
-                      · rw [ite_eq_left hgrow] at H
-                        by_cases hcond : (listNN_eqb zs (mremap_tail old old_n old_nZ new_nZ) &&
-                            listNN_eqb us [] && listCopy_eqb cs []) = true
-                        · rw [ite_eq_left hcond] at H
+          · rw [ite_eq_right hold] at H
+            -- the two roundings, as the soundness walk names them
+            have hnewP := page_align_is0_false_parts new_size hnew
+            have holdP := page_align_is0_false_parts old_size hold
+            have hnewPos : 0 < page_round_up_Z (new_size.toNat : Int) := by
+              apply page_round_up_pos
+              have h := w_is0_false new_size hnewP.1
+              simp only [bv_unsigned_def] at h
+              omega
+            have holdPos : 0 < page_round_up_Z (old_size.toNat : Int) := by
+              apply page_round_up_pos
+              have h := w_is0_false old_size holdP.1
+              simp only [bv_unsigned_def] at h
+              omega
+            generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H
+            generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H
+            generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H
+            generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H
+            have hold_lt : old_nZ < two_pow_64 := by rw [← hOldN]; exact holdP.2
+            have hnew_lt : new_nZ < two_pow_64 := by rw [← hNewN]; exact hnewP.2
+            have hold_nn : 0 ≤ old_nZ := by
+              rw [← hOldN]
+              have := page_round_up_Z_ge (old_size.toNat : Int) (by omega)
+              omega
+            have hnew_nn : 0 ≤ new_nZ := by
+              rw [← hNewN]
+              have := page_round_up_Z_ge (new_size.toNat : Int) (by omega)
+              omega
+            have holdv : bv_unsigned old_n = old_nZ := by
+              rw [← hOldW]
+              exact u64 old_nZ ⟨hold_nn, hold_lt⟩
+            have hnewv : bv_unsigned new_n = new_nZ := by
+              rw [← hNewW]
+              exact u64 new_nZ ⟨hnew_nn, hnew_lt⟩
+            by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                mremap_backing_uniform_b m old old_n)) = true
+            · rw [ite_eq_left hsrc] at H
+              exact nomatch H
+            · rw [ite_eq_right hsrc] at H
+              by_cases heq : (old_nZ == new_nZ) = true
+              · rw [ite_eq_left heq] at H
+                rw [check_ret_only_model (m' := m') (evs := evs) (H := H)]
+                exact Hwf
+              · rw [ite_eq_right heq] at H
+                obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
+                cases ws <;> cases copyins <;> try dsimp only at H
+                · by_cases herr : errno_ret_in mremap_errnos r = true
+                  · rw [ite_eq_left herr] at H
+                    cases zs <;> cases us <;> cases cs <;> try dsimp only at H
+                    · simp only [check_result.CheckOk.injEq] at H
+                      obtain ⟨hm, hevs⟩ := H
+                      rw [hm.symm]
+                      exact Hwf
+                    all_goals (exact nomatch H)
+                  · rw [ite_eq_right herr] at H
+                    by_cases hret : bv_eqb r old = true
+                    · rw [ite_eq_left hret] at H
+                      by_cases hlt : new_nZ < old_nZ
+                      · rw [ite_eq_left hlt] at H
+                        by_cases hshrink : (listNN_eqb zs [] &&
+                            listNN_eqb us
+                              [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
+                            listCopy_eqb cs []) = true
+                        · rw [ite_eq_left hshrink] at H
                           simp only [check_result.CheckOk.injEq] at H
                           obtain ⟨hm, hevs⟩ := H
                           rw [hm.symm]
-                          -- THE IN-PLACE GROW: the source entry reappears
-                          -- LONGER at the same base, and the gate holds the
-                          -- whole grown range free of everything else
-                          have hg : region_free (vm_reserved (m_vmmaps m) ++
-                              map_remove (vm_maps (m_vmmaps m)) old) old new_n = true := by
-                            unfold mremap_inplace_grow_b at hgrow
-                            dsimp only at hgrow
-                            simp only [Bool.and_eq_true] at hgrow
-                            exact hgrow.1.2
+                          -- THE SHRINK: the source entry is replaced by a
+                          -- shorter one at the same base (`maps_wf_cons_sub`)
+                          have hbb : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                              mremap_backing_uniform_b m old old_n) = true := by
+                            cases hb : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                                mremap_backing_uniform_b m old old_n)
+                            · rw [hb] at hsrc
+                              simp at hsrc
+                            · rfl
+                          have hsrcb : mremap_source_b (m_vmmaps m) old old_n old_nZ = true :=
+                            (Bool.and_eq_true ..).mp hbb |>.1
+                          unfold mremap_source_b at hsrcb
+                          simp only [Bool.and_eq_true, decide_eq_true_eq] at hsrcb
+                          have hhas : map_has (vm_maps (m_vmmaps m)) old old_n = true := hsrcb.1.2
+                          have Hin : (old, old_n) ∈ vm_maps (m_vmmaps m) :=
+                            map_has_In _ old old_n hhas
                           have hnz : bv_unsigned new_n ≠ 0 := by
                             rw [hnewv]
                             omega
+                          have hle : bv_unsigned new_n ≤ bv_unsigned old_n := by
+                            rw [hnewv, holdv]
+                            omega
                           rw [vmm_mremap_next]
-                          exact maps_wf_cons_free (map_remove (vm_maps (m_vmmaps m)) old)
-                            old new_n (maps_wf_filter _ _ Hwf) hnz
-                            (region_free_app_r _ _ _ _ hg)
-                        · rw [ite_eq_right hcond] at H
+                          exact maps_wf_cons_sub (vm_maps (m_vmmaps m)) old old_n new_n
+                            Hwf hnz Hin hle
+                        · rw [ite_eq_right hshrink] at H
                           exact nomatch H
-                      · rw [ite_eq_right hgrow] at H
+                      · rw [ite_eq_right hlt] at H
+                        by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
+                        · rw [ite_eq_left hgrow] at H
+                          by_cases hcond : (listNN_eqb zs (mremap_tail old old_n old_nZ new_nZ) &&
+                              listNN_eqb us [] && listCopy_eqb cs []) = true
+                          · rw [ite_eq_left hcond] at H
+                            simp only [check_result.CheckOk.injEq] at H
+                            obtain ⟨hm, hevs⟩ := H
+                            rw [hm.symm]
+                            -- THE IN-PLACE GROW: the source entry reappears
+                            -- LONGER at the same base, and the gate holds the
+                            -- whole grown range free of everything else
+                            have hg : region_free (vm_reserved (m_vmmaps m) ++
+                                map_remove (vm_maps (m_vmmaps m)) old) old new_n = true := by
+                              unfold mremap_inplace_grow_b at hgrow
+                              dsimp only at hgrow
+                              simp only [Bool.and_eq_true] at hgrow
+                              exact hgrow.1.2
+                            have hnz : bv_unsigned new_n ≠ 0 := by
+                              rw [hnewv]
+                              omega
+                            rw [vmm_mremap_next]
+                            exact maps_wf_cons_free (map_remove (vm_maps (m_vmmaps m)) old)
+                              old new_n (maps_wf_filter _ _ Hwf) hnz
+                              (region_free_app_r _ _ _ _ hg)
+                          · rw [ite_eq_right hcond] at H
+                            exact nomatch H
+                        · rw [ite_eq_right hgrow] at H
+                          exact nomatch H
+                    · rw [ite_eq_right hret] at H
+                      by_cases hcond : (decide (old_nZ < new_nZ) &&
+                          mremap_fresh_b m old_nZ new_nZ old old_n r new_n &&
+                          listNN_eqb zs (mremap_tail r old_n old_nZ new_nZ) &&
+                          listNN_eqb us [(old, old_n)] &&
+                          listCopy_eqb cs [MemCopy.mkCopy old r old_n]) = true
+                      · rw [ite_eq_left hcond] at H
+                        simp only [check_result.CheckOk.injEq] at H
+                        obtain ⟨hm, hevs⟩ := H
+                        rw [hm.symm]
+                        -- THE MOVE: the destination is a fresh page-aligned
+                        -- grant, the source entry is dropped
+                        have hf : mremap_fresh_b m old_nZ new_nZ old old_n r new_n = true := by
+                          have h1 := hcond
+                          simp only [Bool.and_eq_true] at h1
+                          exact h1.1.1.1.2
+                        have hg : region_free (vm_reserved (m_vmmaps m) ++
+                            vm_maps (m_vmmaps m)) r new_n = true := by
+                          unfold mremap_fresh_b at hf
+                          dsimp only at hf
+                          simp only [Bool.and_eq_true] at hf
+                          exact hf.1.2
+                        have hnz : bv_unsigned new_n ≠ 0 := by
+                          rw [hnewv]
+                          omega
+                        rw [vmm_mremap_next]
+                        exact maps_wf_cons_free (map_remove (vm_maps (m_vmmaps m)) old)
+                          r new_n (maps_wf_filter _ _ Hwf) hnz
+                          (region_free_filter _ _ _ _ (region_free_app_r _ _ _ _ hg))
+                      · rw [ite_eq_right hcond] at H
                         exact nomatch H
-                  · rw [ite_eq_right hret] at H
-                    by_cases hcond : (decide (old_nZ < new_nZ) &&
-                        mremap_fresh_b m old_nZ new_nZ old old_n r new_n &&
-                        listNN_eqb zs (mremap_tail r old_n old_nZ new_nZ) &&
-                        listNN_eqb us [(old, old_n)] &&
-                        listCopy_eqb cs [MemCopy.mkCopy old r old_n]) = true
-                    · rw [ite_eq_left hcond] at H
-                      simp only [check_result.CheckOk.injEq] at H
-                      obtain ⟨hm, hevs⟩ := H
-                      rw [hm.symm]
-                      -- THE MOVE: the destination is a fresh page-aligned
-                      -- grant, the source entry is dropped
-                      have hf : mremap_fresh_b m old_nZ new_nZ old old_n r new_n = true := by
-                        have h1 := hcond
-                        simp only [Bool.and_eq_true] at h1
-                        exact h1.1.1.1.2
-                      have hg : region_free (vm_reserved (m_vmmaps m) ++
-                          vm_maps (m_vmmaps m)) r new_n = true := by
-                        unfold mremap_fresh_b at hf
-                        dsimp only at hf
-                        simp only [Bool.and_eq_true] at hf
-                        exact hf.1.2
-                      have hnz : bv_unsigned new_n ≠ 0 := by
-                        rw [hnewv]
-                        omega
-                      rw [vmm_mremap_next]
-                      exact maps_wf_cons_free (map_remove (vm_maps (m_vmmaps m)) old)
-                        r new_n (maps_wf_filter _ _ Hwf) hnz
-                        (region_free_filter _ _ _ _ (region_free_app_r _ _ _ _ hg))
-                    · rw [ite_eq_right hcond] at H
-                      exact nomatch H
-              all_goals (exact nomatch H)
+                all_goals (exact nomatch H)
 
 /-! ## `mmap` — the writer with the widest surface: grants, destroyed
     ranges, contained replacements and spanning grants

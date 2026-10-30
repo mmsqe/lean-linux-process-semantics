@@ -84,6 +84,8 @@ def check_mremap (old old_size new_size flags : word) (eff : SyscallEffect) (m :
     check_ret_only eff (errno_ret EINVAL) m []
   else if page_align_is0_b new_size then
     check_ret_only eff (errno_ret EINVAL) m []
+  else if (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int) then
+    check_ret_only eff (errno_ret EINVAL) m []
   else if page_align_is0_b old_size then .CheckUnmodeled
   else
     let old_nZ := page_round_up_Z (old_size.toNat : Int)
@@ -289,106 +291,75 @@ theorem check_mremap_sound_ok (old old_size new_size flags : word) (eff : Syscal
           (check_ret_only_ok_iff eff (errno_ret EINVAL) m [] m' evs).mp H
         exact pure_ok _ i _
       · rw [ite_eq_right hnew] at H ⊢
-        by_cases hold : page_align_is0_b old_size = true
-        · rw [ite_eq_left hold] at H
-          exact nomatch H
-        · rw [ite_eq_right hold] at H ⊢
-          rw [bind_getModel]
-          try dsimp only
-          -- name the two roundings once; both sides now carry them verbatim
-          generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H ⊢
-          generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H ⊢
-          generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H ⊢
-          generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H ⊢
-          by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-              mremap_backing_uniform_b m old old_n)) = true
-          · -- the model does not track this source: the checker declines
-            rw [ite_eq_left hsrc] at H
+        by_cases htask : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · rw [ite_eq_left htask] at H ⊢
+          obtain ⟨rfl, rfl, rfl⟩ :=
+            (check_ret_only_ok_iff eff (errno_ret EINVAL) m [] m' evs).mp H
+          exact pure_ok _ i _
+        · rw [ite_eq_right htask] at H ⊢
+          by_cases hold : page_align_is0_b old_size = true
+          · rw [ite_eq_left hold] at H
             exact nomatch H
-          · rw [ite_eq_right hsrc] at H ⊢
-            by_cases heq : (old_nZ == new_nZ) = true
-            · -- the equal-size no-op
-              rw [ite_eq_left heq] at H ⊢
-              obtain ⟨rfl, rfl, rfl⟩ :=
-                (check_ret_only_ok_iff eff old m [] m' evs).mp H
-              exact pure_ok _ i _
-            · rw [ite_eq_right heq] at H ⊢
-              -- the four answered resizing shapes
-              obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
-              cases ws <;> cases copyins <;> dsimp only at H
-              · -- an empty write ledger and an empty copy-in ledger
-                by_cases herr : errno_ret_in mremap_errnos r = true
-                · -- the injected errno, state untouched, no ledgers
-                  rw [ite_eq_left herr] at H
-                  cases zs <;> cases us <;> cases cs <;> dsimp only at H
-                  · simp only [check_result.CheckOk.injEq] at H
-                    obtain ⟨hm, hevs⟩ := H
-                    have hm' : m' = m := hm.symm
-                    have hevs' : evs = [] := hevs.symm
-                    rw [hm', hevs']
-                    obtain ⟨e, hmem, hr⟩ := (errno_ret_in_true mremap_errnos r).mp herr
-                    rw [hr]
-                    refine Or.inl ?_
-                    exact bind_ok0 (errno_from mremap_errnos) (fun e => err_ret e) i m e m
-                      (mkEffect (errno_ret e) [] []) m []
-                      (choose_ok _ e i m hmem) (pure_ok _ i m)
-                  all_goals (exact nomatch H)
-                · rw [ite_eq_right herr] at H
-                  by_cases hret : bv_eqb r old = true
-                  · -- the answer is the source address: a shrink or an in-place grow
-                    rw [ite_eq_left hret] at H
-                    have hr : r = old := (Fs.bv_eqb_eq r old).mp hret
-                    rw [hr]
-                    by_cases hlt : new_nZ < old_nZ
-                    · -- the shrink: the tail is unmapped
-                      rw [ite_eq_left hlt] at H ⊢
-                      by_cases hshrink : (listNN_eqb zs [] &&
-                          listNN_eqb us
-                            [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
-                          listCopy_eqb cs []) = true
-                      · rw [ite_eq_left hshrink] at H
-                        simp only [Bool.and_eq_true] at hshrink
-                        have hzs : zs = [] := (listNN_eqb_eq zs []).mp hshrink.1.1
-                        have hus : us = [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] :=
-                          (listNN_eqb_eq us _).mp hshrink.1.2
-                        have hcs : cs = [] := (listCopy_eqb_eq cs []).mp hshrink.2
-                        rw [hzs, hus, hcs]
-                        simp only [check_result.CheckOk.injEq] at H
-                        obtain ⟨hm, hevs⟩ := H
-                        have hm' : m' = mremap_model_next m old old_n old new_n := hm.symm
-                        have hevs' : evs = [] := hevs.symm
-                        rw [hm', hevs']
-                        refine Or.inr ?_
-                        -- the spec's shrink effect, at the shape the checker read
-                        have hEff : mremap_inplace_effect old old_n new_n old_nZ new_nZ =
-                            SyscallEffect.mkEffectU old [] []
-                            [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] [] := by
-                          unfold mremap_inplace_effect
-                          rw [ite_eq_left hlt]
-                        rw [hEff]
-                        exact bind_ok0
-                          (modify (fun _ => mremap_model_next m old old_n old new_n))
-                          (fun _ => pure (SyscallEffect.mkEffectU old [] []
-                            [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] []))
-                          i m () (mremap_model_next m old old_n old new_n)
-                          (SyscallEffect.mkEffectU old [] []
-                            [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] [])
-                          (mremap_model_next m old old_n old new_n) []
-                          (modify_ok _ i m) (pure_ok _ i _)
-                      · rw [ite_eq_right hshrink] at H
-                        exact nomatch H
-                    · -- not a shrink: an in-place grow, or a move
-                      rw [ite_eq_right hlt] at H ⊢
-                      by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
-                      · rw [ite_eq_left hgrow] at H ⊢
-                        by_cases hcond : (listNN_eqb zs (mremap_tail old old_n old_nZ new_nZ) &&
-                            listNN_eqb us [] && listCopy_eqb cs []) = true
-                        · rw [ite_eq_left hcond] at H
-                          simp only [Bool.and_eq_true] at hcond
-                          have hzs : zs = mremap_tail old old_n old_nZ new_nZ :=
-                            (listNN_eqb_eq zs _).mp hcond.1.1
-                          have hus : us = [] := (listNN_eqb_eq us []).mp hcond.1.2
-                          have hcs : cs = [] := (listCopy_eqb_eq cs []).mp hcond.2
+          · rw [ite_eq_right hold] at H ⊢
+            rw [bind_getModel]
+            try dsimp only
+            -- name the two roundings once; both sides now carry them verbatim
+            generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H ⊢
+            generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H ⊢
+            generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H ⊢
+            generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H ⊢
+            by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                mremap_backing_uniform_b m old old_n)) = true
+            · -- the model does not track this source: the checker declines
+              rw [ite_eq_left hsrc] at H
+              exact nomatch H
+            · rw [ite_eq_right hsrc] at H ⊢
+              by_cases heq : (old_nZ == new_nZ) = true
+              · -- the equal-size no-op
+                rw [ite_eq_left heq] at H ⊢
+                obtain ⟨rfl, rfl, rfl⟩ :=
+                  (check_ret_only_ok_iff eff old m [] m' evs).mp H
+                exact pure_ok _ i _
+              · rw [ite_eq_right heq] at H ⊢
+                -- the four answered resizing shapes
+                obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
+                cases ws <;> cases copyins <;> dsimp only at H
+                · -- an empty write ledger and an empty copy-in ledger
+                  by_cases herr : errno_ret_in mremap_errnos r = true
+                  · -- the injected errno, state untouched, no ledgers
+                    rw [ite_eq_left herr] at H
+                    cases zs <;> cases us <;> cases cs <;> dsimp only at H
+                    · simp only [check_result.CheckOk.injEq] at H
+                      obtain ⟨hm, hevs⟩ := H
+                      have hm' : m' = m := hm.symm
+                      have hevs' : evs = [] := hevs.symm
+                      rw [hm', hevs']
+                      obtain ⟨e, hmem, hr⟩ := (errno_ret_in_true mremap_errnos r).mp herr
+                      rw [hr]
+                      refine Or.inl ?_
+                      exact bind_ok0 (errno_from mremap_errnos) (fun e => err_ret e) i m e m
+                        (mkEffect (errno_ret e) [] []) m []
+                        (choose_ok _ e i m hmem) (pure_ok _ i m)
+                    all_goals (exact nomatch H)
+                  · rw [ite_eq_right herr] at H
+                    by_cases hret : bv_eqb r old = true
+                    · -- the answer is the source address: a shrink or an in-place grow
+                      rw [ite_eq_left hret] at H
+                      have hr : r = old := (Fs.bv_eqb_eq r old).mp hret
+                      rw [hr]
+                      by_cases hlt : new_nZ < old_nZ
+                      · -- the shrink: the tail is unmapped
+                        rw [ite_eq_left hlt] at H ⊢
+                        by_cases hshrink : (listNN_eqb zs [] &&
+                            listNN_eqb us
+                              [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
+                            listCopy_eqb cs []) = true
+                        · rw [ite_eq_left hshrink] at H
+                          simp only [Bool.and_eq_true] at hshrink
+                          have hzs : zs = [] := (listNN_eqb_eq zs []).mp hshrink.1.1
+                          have hus : us = [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] :=
+                            (listNN_eqb_eq us _).mp hshrink.1.2
+                          have hcs : cs = [] := (listCopy_eqb_eq cs []).mp hshrink.2
                           rw [hzs, hus, hcs]
                           simp only [check_result.CheckOk.injEq] at H
                           obtain ⟨hm, hevs⟩ := H
@@ -396,84 +367,121 @@ theorem check_mremap_sound_ok (old old_size new_size flags : word) (eff : Syscal
                           have hevs' : evs = [] := hevs.symm
                           rw [hm', hevs']
                           refine Or.inr ?_
-                          refine Or.inl ?_
-                          -- the spec's in-place grow effect, at the shape the checker read
+                          -- the spec's shrink effect, at the shape the checker read
                           have hEff : mremap_inplace_effect old old_n new_n old_nZ new_nZ =
-                              mkEffect old [] (mremap_tail old old_n old_nZ new_nZ) := by
+                              SyscallEffect.mkEffectU old [] []
+                              [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] [] := by
                             unfold mremap_inplace_effect
-                            rw [ite_eq_right hlt]
+                            rw [ite_eq_left hlt]
                           rw [hEff]
                           exact bind_ok0
                             (modify (fun _ => mremap_model_next m old old_n old new_n))
-                            (fun _ => pure (mkEffect old [] (mremap_tail old old_n old_nZ new_nZ)))
+                            (fun _ => pure (SyscallEffect.mkEffectU old [] []
+                              [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] []))
                             i m () (mremap_model_next m old old_n old new_n)
-                            (mkEffect old [] (mremap_tail old old_n old_nZ new_nZ))
+                            (SyscallEffect.mkEffectU old [] []
+                              [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] [])
                             (mremap_model_next m old old_n old new_n) []
                             (modify_ok _ i m) (pure_ok _ i _)
-                        · rw [ite_eq_right hcond] at H
+                        · rw [ite_eq_right hshrink] at H
                           exact nomatch H
-                      · rw [ite_eq_right hgrow] at H
-                        exact nomatch H
-                  · -- a fresh destination: the move
-                    rw [ite_eq_right hret] at H
-                    by_cases hcond : (decide (old_nZ < new_nZ) &&
-                        mremap_fresh_b m old_nZ new_nZ old old_n r new_n &&
-                        listNN_eqb zs (mremap_tail r old_n old_nZ new_nZ) &&
-                        listNN_eqb us [(old, old_n)] &&
-                        listCopy_eqb cs [MemCopy.mkCopy old r old_n]) = true
-                    · rw [ite_eq_left hcond] at H
-                      simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
-                      have hlt' : old_nZ < new_nZ := hcond.1.1.1.1
-                      have hfresh : mremap_fresh_b m old_nZ new_nZ old old_n r new_n = true :=
-                        hcond.1.1.1.2
-                      have hzs : zs = mremap_tail r old_n old_nZ new_nZ :=
-                        (listNN_eqb_eq zs _).mp hcond.1.1.2
-                      have hus : us = [(old, old_n)] := (listNN_eqb_eq us _).mp hcond.1.2
-                      have hcs : cs = [MemCopy.mkCopy old r old_n] :=
-                        (listCopy_eqb_eq cs _).mp hcond.2
-                      rw [hzs, hus, hcs]
-                      simp only [check_result.CheckOk.injEq] at H
-                      obtain ⟨hm, hevs⟩ := H
-                      have hm' : m' = mremap_model_next m old old_n r new_n := hm.symm
-                      have hevs' : evs = [] := hevs.symm
-                      rw [hm', hevs']
-                      -- the move body, built once for both of the spec's routes to it
-                      have hmove :
-                          bind (choose (fun dst =>
+                      · -- not a shrink: an in-place grow, or a move
+                        rw [ite_eq_right hlt] at H ⊢
+                        by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
+                        · rw [ite_eq_left hgrow] at H ⊢
+                          by_cases hcond : (listNN_eqb zs (mremap_tail old old_n old_nZ new_nZ) &&
+                              listNN_eqb us [] && listCopy_eqb cs []) = true
+                          · rw [ite_eq_left hcond] at H
+                            simp only [Bool.and_eq_true] at hcond
+                            have hzs : zs = mremap_tail old old_n old_nZ new_nZ :=
+                              (listNN_eqb_eq zs _).mp hcond.1.1
+                            have hus : us = [] := (listNN_eqb_eq us []).mp hcond.1.2
+                            have hcs : cs = [] := (listCopy_eqb_eq cs []).mp hcond.2
+                            rw [hzs, hus, hcs]
+                            simp only [check_result.CheckOk.injEq] at H
+                            obtain ⟨hm, hevs⟩ := H
+                            have hm' : m' = mremap_model_next m old old_n old new_n := hm.symm
+                            have hevs' : evs = [] := hevs.symm
+                            rw [hm', hevs']
+                            refine Or.inr ?_
+                            refine Or.inl ?_
+                            -- the spec's in-place grow effect, at the shape the checker read
+                            have hEff : mremap_inplace_effect old old_n new_n old_nZ new_nZ =
+                                mkEffect old [] (mremap_tail old old_n old_nZ new_nZ) := by
+                              unfold mremap_inplace_effect
+                              rw [ite_eq_right hlt]
+                            rw [hEff]
+                            exact bind_ok0
+                              (modify (fun _ => mremap_model_next m old old_n old new_n))
+                              (fun _ => pure (mkEffect old [] (mremap_tail old old_n old_nZ new_nZ)))
+                              i m () (mremap_model_next m old old_n old new_n)
+                              (mkEffect old [] (mremap_tail old old_n old_nZ new_nZ))
+                              (mremap_model_next m old old_n old new_n) []
+                              (modify_ok _ i m) (pure_ok _ i _)
+                          · rw [ite_eq_right hcond] at H
+                            exact nomatch H
+                        · rw [ite_eq_right hgrow] at H
+                          exact nomatch H
+                    · -- a fresh destination: the move
+                      rw [ite_eq_right hret] at H
+                      by_cases hcond : (decide (old_nZ < new_nZ) &&
+                          mremap_fresh_b m old_nZ new_nZ old old_n r new_n &&
+                          listNN_eqb zs (mremap_tail r old_n old_nZ new_nZ) &&
+                          listNN_eqb us [(old, old_n)] &&
+                          listCopy_eqb cs [MemCopy.mkCopy old r old_n]) = true
+                      · rw [ite_eq_left hcond] at H
+                        simp only [Bool.and_eq_true, decide_eq_true_eq] at hcond
+                        have hlt' : old_nZ < new_nZ := hcond.1.1.1.1
+                        have hfresh : mremap_fresh_b m old_nZ new_nZ old old_n r new_n = true :=
+                          hcond.1.1.1.2
+                        have hzs : zs = mremap_tail r old_n old_nZ new_nZ :=
+                          (listNN_eqb_eq zs _).mp hcond.1.1.2
+                        have hus : us = [(old, old_n)] := (listNN_eqb_eq us _).mp hcond.1.2
+                        have hcs : cs = [MemCopy.mkCopy old r old_n] :=
+                          (listCopy_eqb_eq cs _).mp hcond.2
+                        rw [hzs, hus, hcs]
+                        simp only [check_result.CheckOk.injEq] at H
+                        obtain ⟨hm, hevs⟩ := H
+                        have hm' : m' = mremap_model_next m old old_n r new_n := hm.symm
+                        have hevs' : evs = [] := hevs.symm
+                        rw [hm', hevs']
+                        -- the move body, built once for both of the spec's routes to it
+                        have hmove :
+                            bind (choose (fun dst =>
+                                mremap_fresh_b m old_nZ new_nZ old old_n dst new_n = true))
+                              (fun dst =>
+                                bind (modify (fun _ => mremap_model_next m old old_n dst new_n))
+                                  (fun _ => pure (mremap_move_effect old old_n dst old_nZ new_nZ)))
+                              i m (.ok (SyscallEffect.mkEffectU r [] (mremap_tail r old_n old_nZ new_nZ)
+                                [(old, old_n)] [MemCopy.mkCopy old r old_n] [])
+                                (mremap_model_next m old old_n r new_n) ([] : List event)) := by
+                          refine bind_ok0 (choose (fun dst =>
                               mremap_fresh_b m old_nZ new_nZ old old_n dst new_n = true))
                             (fun dst =>
                               bind (modify (fun _ => mremap_model_next m old old_n dst new_n))
                                 (fun _ => pure (mremap_move_effect old old_n dst old_nZ new_nZ)))
-                            i m (.ok (SyscallEffect.mkEffectU r [] (mremap_tail r old_n old_nZ new_nZ)
+                            i m r m _ _ []
+                            (choose_ok _ r i m hfresh) ?_
+                          refine bind_ok0
+                            (modify (fun _ => mremap_model_next m old old_n r new_n))
+                            (fun _ => pure (mremap_move_effect old old_n r old_nZ new_nZ))
+                            i m () (mremap_model_next m old old_n r new_n)
+                            (SyscallEffect.mkEffectU r [] (mremap_tail r old_n old_nZ new_nZ)
                               [(old, old_n)] [MemCopy.mkCopy old r old_n] [])
-                              (mremap_model_next m old old_n r new_n) ([] : List event)) := by
-                        refine bind_ok0 (choose (fun dst =>
-                            mremap_fresh_b m old_nZ new_nZ old old_n dst new_n = true))
-                          (fun dst =>
-                            bind (modify (fun _ => mremap_model_next m old old_n dst new_n))
-                              (fun _ => pure (mremap_move_effect old old_n dst old_nZ new_nZ)))
-                          i m r m _ _ []
-                          (choose_ok _ r i m hfresh) ?_
-                        refine bind_ok0
-                          (modify (fun _ => mremap_model_next m old old_n r new_n))
-                          (fun _ => pure (mremap_move_effect old old_n r old_nZ new_nZ))
-                          i m () (mremap_model_next m old old_n r new_n)
-                          (SyscallEffect.mkEffectU r [] (mremap_tail r old_n old_nZ new_nZ)
-                            [(old, old_n)] [MemCopy.mkCopy old r old_n] [])
-                          (mremap_model_next m old old_n r new_n) []
-                          (modify_ok _ i m) ?_
-                        exact pure_ok _ i _
-                      by_cases hlt : new_nZ < old_nZ
-                      · omega
-                      · rw [ite_eq_right hlt]
-                        by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
-                        · rw [ite_eq_left hgrow]
-                          exact Or.inr (Or.inr hmove)
-                        · rw [ite_eq_right hgrow]
-                          exact Or.inr hmove
-                    · rw [ite_eq_right hcond] at H
-                      exact nomatch H
-              all_goals (exact nomatch H)
+                            (mremap_model_next m old old_n r new_n) []
+                            (modify_ok _ i m) ?_
+                          exact pure_ok _ i _
+                        by_cases hlt : new_nZ < old_nZ
+                        · omega
+                        · rw [ite_eq_right hlt]
+                          by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
+                          · rw [ite_eq_left hgrow]
+                            exact Or.inr (Or.inr hmove)
+                          · rw [ite_eq_right hgrow]
+                            exact Or.inr hmove
+                      · rw [ite_eq_right hcond] at H
+                        exact nomatch H
+                all_goals (exact nomatch H)
 
 theorem check_mremap_sound_unmodeled (old old_size new_size flags : word) (eff : SyscallEffect)
     (m : Model) (i : SyscallInput)
@@ -496,71 +504,75 @@ theorem check_mremap_sound_unmodeled (old old_size new_size flags : word) (eff :
       · rw [ite_eq_left hnew] at H
         exact absurd H (check_ret_only_no_unmodeled eff (errno_ret EINVAL) m [])
       · rw [ite_eq_right hnew] at H ⊢
-        by_cases hold : page_align_is0_b old_size = true
-        · -- a zero rounded source length: both sides decline
-          rw [ite_eq_left hold] at H ⊢
-          exact unmodeled_intro i m
-        · rw [ite_eq_right hold] at H ⊢
-          rw [bind_getModel]
-          try dsimp only
-          generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H ⊢
-          generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H ⊢
-          generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H ⊢
-          generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H ⊢
-          by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-              mremap_backing_uniform_b m old old_n)) = true
-          · -- the source gate declines
-            rw [ite_eq_left hsrc] at H ⊢
+        by_cases htask : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · rw [ite_eq_left htask] at H
+          exact absurd H (check_ret_only_no_unmodeled eff (errno_ret EINVAL) m [])
+        · rw [ite_eq_right htask] at H ⊢
+          by_cases hold : page_align_is0_b old_size = true
+          · -- a zero rounded source length: both sides decline
+            rw [ite_eq_left hold] at H ⊢
             exact unmodeled_intro i m
-          · rw [ite_eq_right hsrc] at H ⊢
-            by_cases heq : (old_nZ == new_nZ) = true
-            · rw [ite_eq_left heq] at H
-              exact absurd H (check_ret_only_no_unmodeled eff old m [])
-            · -- past the gates the checker never answers `CheckUnmodeled`:
-              -- every arm accepts or rejects, so the hypothesis is impossible
-              rw [ite_eq_right heq] at H
-              exfalso
-              obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
-              cases ws <;> cases copyins <;> dsimp only at H
-              · by_cases herr : errno_ret_in mremap_errnos r = true
-                · rw [ite_eq_left herr] at H
-                  cases zs <;> cases us <;> cases cs <;> dsimp only at H
-                  all_goals (exact nomatch H)
-                · rw [ite_eq_right herr] at H
-                  by_cases hret : bv_eqb r old = true
-                  · rw [ite_eq_left hret] at H
-                    by_cases hlt : new_nZ < old_nZ
-                    · rw [ite_eq_left hlt] at H
-                      by_cases hshrink : (listNN_eqb zs [] &&
-                          listNN_eqb us
-                            [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
-                          listCopy_eqb cs []) = true
-                      · rw [ite_eq_left hshrink] at H
-                        exact nomatch H
-                      · rw [ite_eq_right hshrink] at H
-                        exact nomatch H
-                    · rw [ite_eq_right hlt] at H
-                      by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
-                      · rw [ite_eq_left hgrow] at H
-                        by_cases hcond : (listNN_eqb zs (mremap_tail old old_n old_nZ new_nZ) &&
-                            listNN_eqb us [] && listCopy_eqb cs []) = true
-                        · rw [ite_eq_left hcond] at H
+          · rw [ite_eq_right hold] at H ⊢
+            rw [bind_getModel]
+            try dsimp only
+            generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H ⊢
+            generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H ⊢
+            generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H ⊢
+            generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H ⊢
+            by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                mremap_backing_uniform_b m old old_n)) = true
+            · -- the source gate declines
+              rw [ite_eq_left hsrc] at H ⊢
+              exact unmodeled_intro i m
+            · rw [ite_eq_right hsrc] at H ⊢
+              by_cases heq : (old_nZ == new_nZ) = true
+              · rw [ite_eq_left heq] at H
+                exact absurd H (check_ret_only_no_unmodeled eff old m [])
+              · -- past the gates the checker never answers `CheckUnmodeled`:
+                -- every arm accepts or rejects, so the hypothesis is impossible
+                rw [ite_eq_right heq] at H
+                exfalso
+                obtain ⟨r, ws, zs, us, cs, copyins⟩ := eff
+                cases ws <;> cases copyins <;> dsimp only at H
+                · by_cases herr : errno_ret_in mremap_errnos r = true
+                  · rw [ite_eq_left herr] at H
+                    cases zs <;> cases us <;> cases cs <;> dsimp only at H
+                    all_goals (exact nomatch H)
+                  · rw [ite_eq_right herr] at H
+                    by_cases hret : bv_eqb r old = true
+                    · rw [ite_eq_left hret] at H
+                      by_cases hlt : new_nZ < old_nZ
+                      · rw [ite_eq_left hlt] at H
+                        by_cases hshrink : (listNN_eqb zs [] &&
+                            listNN_eqb us
+                              [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
+                            listCopy_eqb cs []) = true
+                        · rw [ite_eq_left hshrink] at H
                           exact nomatch H
-                        · rw [ite_eq_right hcond] at H
+                        · rw [ite_eq_right hshrink] at H
                           exact nomatch H
-                      · rw [ite_eq_right hgrow] at H
+                      · rw [ite_eq_right hlt] at H
+                        by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
+                        · rw [ite_eq_left hgrow] at H
+                          by_cases hcond : (listNN_eqb zs (mremap_tail old old_n old_nZ new_nZ) &&
+                              listNN_eqb us [] && listCopy_eqb cs []) = true
+                          · rw [ite_eq_left hcond] at H
+                            exact nomatch H
+                          · rw [ite_eq_right hcond] at H
+                            exact nomatch H
+                        · rw [ite_eq_right hgrow] at H
+                          exact nomatch H
+                    · rw [ite_eq_right hret] at H
+                      by_cases hcond : (decide (old_nZ < new_nZ) &&
+                          mremap_fresh_b m old_nZ new_nZ old old_n r new_n &&
+                          listNN_eqb zs (mremap_tail r old_n old_nZ new_nZ) &&
+                          listNN_eqb us [(old, old_n)] &&
+                          listCopy_eqb cs [MemCopy.mkCopy old r old_n]) = true
+                      · rw [ite_eq_left hcond] at H
                         exact nomatch H
-                  · rw [ite_eq_right hret] at H
-                    by_cases hcond : (decide (old_nZ < new_nZ) &&
-                        mremap_fresh_b m old_nZ new_nZ old old_n r new_n &&
-                        listNN_eqb zs (mremap_tail r old_n old_nZ new_nZ) &&
-                        listNN_eqb us [(old, old_n)] &&
-                        listCopy_eqb cs [MemCopy.mkCopy old r old_n]) = true
-                    · rw [ite_eq_left hcond] at H
-                      exact nomatch H
-                    · rw [ite_eq_right hcond] at H
-                      exact nomatch H
-              all_goals (exact nomatch H)
+                      · rw [ite_eq_right hcond] at H
+                        exact nomatch H
+                all_goals (exact nomatch H)
 
 /-- The rounding of a non-negative length is non-negative.  (The fact is
     used only here, at the two `page_align_is0_b` call sites, which is why
@@ -595,142 +607,147 @@ theorem check_mremap_complete_ok (old old_size new_size flags : word) (eff : Sys
         obtain ⟨rfl, rfl, rfl⟩ := H
         simp [check_ret_only, bv_eqb_refl]
       · rw [ite_eq_right hnew] at H ⊢
-        by_cases hold : page_align_is0_b old_size = true
-        · rw [ite_eq_left hold] at H
-          exact absurd H (by simp [LinuxSem.LinuxProcessSem.unmodeled])
-        · rw [ite_eq_right hold] at H ⊢
-          rw [bind_getModel] at H
-          try dsimp only at H
-          generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H ⊢
-          generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H ⊢
-          generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H ⊢
-          generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H ⊢
-          by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-              mremap_backing_uniform_b m old old_n)) = true
-          · rw [ite_eq_left hsrc] at H
+        by_cases htask : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · rw [ite_eq_left htask] at H ⊢
+          obtain ⟨rfl, rfl, rfl⟩ := H
+          simp [check_ret_only, bv_eqb_refl]
+        · rw [ite_eq_right htask] at H ⊢
+          by_cases hold : page_align_is0_b old_size = true
+          · rw [ite_eq_left hold] at H
             exact absurd H (by simp [LinuxSem.LinuxProcessSem.unmodeled])
-          · rw [ite_eq_right hsrc] at H ⊢
-            -- the spec's own source gate, positively
-            have hsrc' : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-                mremap_backing_uniform_b m old old_n) = true := by
-              cases h : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-                  mremap_backing_uniform_b m old old_n) <;> simp [h] at hsrc ⊢
-            have hsource : mremap_source_b (m_vmmaps m) old old_n old_nZ = true :=
-              (Bool.and_eq_true ..).mp hsrc' |>.1
-            -- a source address below `alloc_top` is never an encoded errno
-            have hold_nonneg : 0 ≤ old_nZ := by
-              rw [← hOldN]
-              exact page_round_up_Z_nonneg' _ (bv_unsigned_range_u64 old_size).1
-            have hold_errno : errno_ret_in mremap_errnos old = false :=
-              mremap_source_ret_not_errno (m_vmmaps m) old old_n old_nZ hold_nonneg hsource
-            have hold_notin : ¬ (errno_ret_in mremap_errnos old = true) := by
-              rw [hold_errno]; simp
-            by_cases heq : (old_nZ == new_nZ) = true
-            · -- the equal-size no-op
-              rw [ite_eq_left heq] at H ⊢
-              obtain ⟨rfl, rfl, rfl⟩ := H
-              simp [check_ret_only, bv_eqb_refl]
-            · rw [ite_eq_right heq] at H ⊢
-              simp only [alt] at H
-              rcases H with herr | hrest
-              · -- the injected errno: no ledger, state untouched
-                obtain ⟨e, hmem, heff, hm, hevs⟩ :=
-                  errno_from_ok_inv mremap_errnos i m eff m' evs herr
-                rw [heff, hm, hevs]
-                dsimp only
-                rw [ite_eq_left (errno_ret_in_intro mremap_errnos e hmem)]
-              · by_cases hlt : new_nZ < old_nZ
-                · -- a shrink: the in-place resolution's first branch
-                  rw [ite_eq_left hlt] at hrest
-                  obtain ⟨heff, hm, hevs⟩ :=
-                    inplace_ok_inv old old_n new_n old_nZ new_nZ m eff m' evs i hrest
-                  have heff' : eff = SyscallEffect.mkEffectU old [] []
-                      [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] [] := by
-                    rw [heff]
-                    unfold mremap_inplace_effect
-                    rw [ite_eq_left hlt]
-                  rw [heff', hm, hevs]
+          · rw [ite_eq_right hold] at H ⊢
+            rw [bind_getModel] at H
+            try dsimp only at H
+            generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H ⊢
+            generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H ⊢
+            generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H ⊢
+            generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H ⊢
+            by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                mremap_backing_uniform_b m old old_n)) = true
+            · rw [ite_eq_left hsrc] at H
+              exact absurd H (by simp [LinuxSem.LinuxProcessSem.unmodeled])
+            · rw [ite_eq_right hsrc] at H ⊢
+              -- the spec's own source gate, positively
+              have hsrc' : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                  mremap_backing_uniform_b m old old_n) = true := by
+                cases h : (mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                    mremap_backing_uniform_b m old old_n) <;> simp [h] at hsrc ⊢
+              have hsource : mremap_source_b (m_vmmaps m) old old_n old_nZ = true :=
+                (Bool.and_eq_true ..).mp hsrc' |>.1
+              -- a source address below `alloc_top` is never an encoded errno
+              have hold_nonneg : 0 ≤ old_nZ := by
+                rw [← hOldN]
+                exact page_round_up_Z_nonneg' _ (bv_unsigned_range_u64 old_size).1
+              have hold_errno : errno_ret_in mremap_errnos old = false :=
+                mremap_source_ret_not_errno (m_vmmaps m) old old_n old_nZ hold_nonneg hsource
+              have hold_notin : ¬ (errno_ret_in mremap_errnos old = true) := by
+                rw [hold_errno]; simp
+              by_cases heq : (old_nZ == new_nZ) = true
+              · -- the equal-size no-op
+                rw [ite_eq_left heq] at H ⊢
+                obtain ⟨rfl, rfl, rfl⟩ := H
+                simp [check_ret_only, bv_eqb_refl]
+              · rw [ite_eq_right heq] at H ⊢
+                simp only [alt] at H
+                rcases H with herr | hrest
+                · -- the injected errno: no ledger, state untouched
+                  obtain ⟨e, hmem, heff, hm, hevs⟩ :=
+                    errno_from_ok_inv mremap_errnos i m eff m' evs herr
+                  rw [heff, hm, hevs]
                   dsimp only
-                  have hshrink : (listNN_eqb [] [] &&
-                      listNN_eqb [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))]
-                        [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
-                      listCopy_eqb [] []) = true := by
-                    rw [(listNN_eqb_eq _ _).mpr rfl]
-                    simp [listNN_eqb, listCopy_eqb, bv_eqb_refl]
-                  rw [ite_eq_right hold_notin, ite_eq_left (bv_eqb_refl old), ite_eq_left hlt, ite_eq_left hshrink]
-                · rw [ite_eq_right hlt] at hrest
-                  -- past the shrink the spec offers the in-place grow (when its
-                  -- gate accepts) beside the move; either resolution is enough
-                  have hcases :
-                      (mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true ∧
-                        LinuxSem.LinuxProcessSem.bind
-                          (modify (fun _ => mremap_model_next m old old_n old new_n))
-                          (fun _ => pure (mremap_inplace_effect old old_n new_n old_nZ new_nZ))
-                          i m (.ok eff m' evs)) ∨
-                      LinuxSem.LinuxProcessSem.bind
-                        (choose (fun dst =>
-                          mremap_fresh_b m old_nZ new_nZ old old_n dst new_n = true))
-                        (fun dst => LinuxSem.LinuxProcessSem.bind
-                          (modify (fun _ => mremap_model_next m old old_n dst new_n))
-                          (fun _ => pure (mremap_move_effect old old_n dst old_nZ new_nZ)))
-                        i m (.ok eff m' evs) := by
-                    by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
-                    · rw [ite_eq_left hgrow] at hrest
-                      simp only [alt] at hrest
-                      rcases hrest with hinp | hmv
-                      · exact Or.inl ⟨hgrow, hinp⟩
-                      · exact Or.inr hmv
-                    · rw [ite_eq_right hgrow] at hrest
-                      exact Or.inr hrest
-                  rcases hcases with ⟨hgrow, hinplace⟩ | hmove
-                  · -- the in-place grow: the in-place resolution's second branch
+                  rw [ite_eq_left (errno_ret_in_intro mremap_errnos e hmem)]
+                · by_cases hlt : new_nZ < old_nZ
+                  · -- a shrink: the in-place resolution's first branch
+                    rw [ite_eq_left hlt] at hrest
                     obtain ⟨heff, hm, hevs⟩ :=
-                      inplace_ok_inv old old_n new_n old_nZ new_nZ m eff m' evs i hinplace
-                    have heff' : eff = mkEffect old [] (mremap_tail old old_n old_nZ new_nZ) := by
+                      inplace_ok_inv old old_n new_n old_nZ new_nZ m eff m' evs i hrest
+                    have heff' : eff = SyscallEffect.mkEffectU old [] []
+                        [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] [] [] := by
                       rw [heff]
                       unfold mremap_inplace_effect
-                      rw [ite_eq_right hlt]
+                      rw [ite_eq_left hlt]
                     rw [heff', hm, hevs]
                     dsimp only
-                    have hcond : (listNN_eqb (mremap_tail old old_n old_nZ new_nZ)
-                          (mremap_tail old old_n old_nZ new_nZ) &&
-                        listNN_eqb [] [] && listCopy_eqb [] []) = true := by
+                    have hshrink : (listNN_eqb [] [] &&
+                        listNN_eqb [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))]
+                          [(old + new_n, BitVec.ofInt 64 (old_nZ - new_nZ))] &&
+                        listCopy_eqb [] []) = true := by
                       rw [(listNN_eqb_eq _ _).mpr rfl]
-                      simp [listNN_eqb, listCopy_eqb]
-                    rw [ite_eq_right hold_notin, ite_eq_left (bv_eqb_refl old), ite_eq_right hlt,
-                      ite_eq_left hgrow, ite_eq_left hcond]
-                  · -- the move, at the fresh destination the spec chose
-                    obtain ⟨dst, hfresh, heff, hm, hevs⟩ :=
-                      move_ok_inv m old old_n new_n old_nZ new_nZ eff m' evs i hmove
-                    have hnew_nonneg : 0 ≤ new_nZ := by
-                      rw [← hNewN]
-                      exact page_round_up_Z_nonneg' _ (bv_unsigned_range_u64 new_size).1
-                    have hdst_errno : errno_ret_in mremap_errnos dst = false :=
-                      mremap_fresh_ret_not_errno m old_nZ new_nZ old old_n dst new_n
-                        hnew_nonneg hfresh
-                    have hdst_notin : ¬ (errno_ret_in mremap_errnos dst = true) := by
-                      rw [hdst_errno]; simp
-                    have hdst_ne : bv_eqb dst old = false :=
-                      mremap_fresh_neq_old m old_nZ new_nZ old old_n dst new_n hfresh
-                    have hdst_ne' : ¬ (bv_eqb dst old = true) := by
-                      rw [hdst_ne]; simp
-                    -- the checker's own move test
-                    have hne : old_nZ ≠ new_nZ := by simpa [beq_iff_eq] using heq
-                    have hltmove : old_nZ < new_nZ := by omega
-                    rw [heff, hm, hevs]
-                    unfold mremap_move_effect
-                    dsimp only
-                    have hchain : (decide (old_nZ < new_nZ) &&
-                        mremap_fresh_b m old_nZ new_nZ old old_n dst new_n &&
-                        listNN_eqb (mremap_tail dst old_n old_nZ new_nZ)
-                          (mremap_tail dst old_n old_nZ new_nZ) &&
-                        listNN_eqb [(old, old_n)] [(old, old_n)] &&
-                        listCopy_eqb [MemCopy.mkCopy old dst old_n]
-                          [MemCopy.mkCopy old dst old_n]) = true := by
-                      rw [(listNN_eqb_eq _ _).mpr rfl, (listNN_eqb_eq _ _).mpr rfl,
-                        (listCopy_eqb_eq _ _).mpr rfl, hfresh]
-                      simp [hltmove]
-                    rw [ite_eq_right hdst_notin, ite_eq_right hdst_ne', ite_eq_left hchain]
+                      simp [listNN_eqb, listCopy_eqb, bv_eqb_refl]
+                    rw [ite_eq_right hold_notin, ite_eq_left (bv_eqb_refl old), ite_eq_left hlt, ite_eq_left hshrink]
+                  · rw [ite_eq_right hlt] at hrest
+                    -- past the shrink the spec offers the in-place grow (when its
+                    -- gate accepts) beside the move; either resolution is enough
+                    have hcases :
+                        (mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true ∧
+                          LinuxSem.LinuxProcessSem.bind
+                            (modify (fun _ => mremap_model_next m old old_n old new_n))
+                            (fun _ => pure (mremap_inplace_effect old old_n new_n old_nZ new_nZ))
+                            i m (.ok eff m' evs)) ∨
+                        LinuxSem.LinuxProcessSem.bind
+                          (choose (fun dst =>
+                            mremap_fresh_b m old_nZ new_nZ old old_n dst new_n = true))
+                          (fun dst => LinuxSem.LinuxProcessSem.bind
+                            (modify (fun _ => mremap_model_next m old old_n dst new_n))
+                            (fun _ => pure (mremap_move_effect old old_n dst old_nZ new_nZ)))
+                          i m (.ok eff m' evs) := by
+                      by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
+                      · rw [ite_eq_left hgrow] at hrest
+                        simp only [alt] at hrest
+                        rcases hrest with hinp | hmv
+                        · exact Or.inl ⟨hgrow, hinp⟩
+                        · exact Or.inr hmv
+                      · rw [ite_eq_right hgrow] at hrest
+                        exact Or.inr hrest
+                    rcases hcases with ⟨hgrow, hinplace⟩ | hmove
+                    · -- the in-place grow: the in-place resolution's second branch
+                      obtain ⟨heff, hm, hevs⟩ :=
+                        inplace_ok_inv old old_n new_n old_nZ new_nZ m eff m' evs i hinplace
+                      have heff' : eff = mkEffect old [] (mremap_tail old old_n old_nZ new_nZ) := by
+                        rw [heff]
+                        unfold mremap_inplace_effect
+                        rw [ite_eq_right hlt]
+                      rw [heff', hm, hevs]
+                      dsimp only
+                      have hcond : (listNN_eqb (mremap_tail old old_n old_nZ new_nZ)
+                            (mremap_tail old old_n old_nZ new_nZ) &&
+                          listNN_eqb [] [] && listCopy_eqb [] []) = true := by
+                        rw [(listNN_eqb_eq _ _).mpr rfl]
+                        simp [listNN_eqb, listCopy_eqb]
+                      rw [ite_eq_right hold_notin, ite_eq_left (bv_eqb_refl old), ite_eq_right hlt,
+                        ite_eq_left hgrow, ite_eq_left hcond]
+                    · -- the move, at the fresh destination the spec chose
+                      obtain ⟨dst, hfresh, heff, hm, hevs⟩ :=
+                        move_ok_inv m old old_n new_n old_nZ new_nZ eff m' evs i hmove
+                      have hnew_nonneg : 0 ≤ new_nZ := by
+                        rw [← hNewN]
+                        exact page_round_up_Z_nonneg' _ (bv_unsigned_range_u64 new_size).1
+                      have hdst_errno : errno_ret_in mremap_errnos dst = false :=
+                        mremap_fresh_ret_not_errno m old_nZ new_nZ old old_n dst new_n
+                          hnew_nonneg hfresh
+                      have hdst_notin : ¬ (errno_ret_in mremap_errnos dst = true) := by
+                        rw [hdst_errno]; simp
+                      have hdst_ne : bv_eqb dst old = false :=
+                        mremap_fresh_neq_old m old_nZ new_nZ old old_n dst new_n hfresh
+                      have hdst_ne' : ¬ (bv_eqb dst old = true) := by
+                        rw [hdst_ne]; simp
+                      -- the checker's own move test
+                      have hne : old_nZ ≠ new_nZ := by simpa [beq_iff_eq] using heq
+                      have hltmove : old_nZ < new_nZ := by omega
+                      rw [heff, hm, hevs]
+                      unfold mremap_move_effect
+                      dsimp only
+                      have hchain : (decide (old_nZ < new_nZ) &&
+                          mremap_fresh_b m old_nZ new_nZ old old_n dst new_n &&
+                          listNN_eqb (mremap_tail dst old_n old_nZ new_nZ)
+                            (mremap_tail dst old_n old_nZ new_nZ) &&
+                          listNN_eqb [(old, old_n)] [(old, old_n)] &&
+                          listCopy_eqb [MemCopy.mkCopy old dst old_n]
+                            [MemCopy.mkCopy old dst old_n]) = true := by
+                        rw [(listNN_eqb_eq _ _).mpr rfl, (listNN_eqb_eq _ _).mpr rfl,
+                          (listCopy_eqb_eq _ _).mpr rfl, hfresh]
+                        simp [hltmove]
+                      rw [ite_eq_right hdst_notin, ite_eq_right hdst_ne', ite_eq_left hchain]
 
 /-- Completeness, declining side: wherever the spec leaves the modeled
     surface, the checker declines too.  The three failing gates are the
@@ -759,52 +776,57 @@ theorem check_mremap_complete_unmodeled (old old_size new_size flags : word) (m 
         exact absurd H (by simp [err_ret, ret_only,
           LinuxSem.LinuxProcessSem.pure])
       · rw [ite_eq_right hnew] at H ⊢
-        by_cases hold : page_align_is0_b old_size = true
-        · -- a zero rounded source length: both sides decline
-          rw [ite_eq_left hold] at H ⊢
-        · rw [ite_eq_right hold] at H ⊢
-          rw [bind_getModel] at H
-          try dsimp only at H
-          generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H
-          generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H
-          generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H
-          generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H
-          by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
-              mremap_backing_uniform_b m old old_n)) = true
-          · -- the source gate declines
-            rw [ite_eq_left hsrc] at H ⊢
-          · rw [ite_eq_right hsrc] at H ⊢
-            by_cases heq : (old_nZ == new_nZ) = true
-            · -- the equal-size no-op answers `ok`, not `unmodeled`
-              rw [ite_eq_left heq] at H
-              exact absurd H (by simp [ret_only,
-                LinuxSem.LinuxProcessSem.pure])
-            · rw [ite_eq_right heq] at H ⊢
-              -- the alternative's arms are built from `choose` / `modify` /
-              -- `pure`, none of which can answer `unmodeled`
-              exfalso
-              unfold LinuxSem.LinuxProcessSem.modify at H
-              by_cases hlt : new_nZ < old_nZ
-              · rw [ite_eq_left hlt] at H
-                simp [LinuxSem.LinuxProcessSem.alt,
-                  LinuxSem.LinuxProcessSem.bind,
-                  LinuxSem.LinuxProcessSem.choose,
-                  LinuxSem.LinuxProcessSem.pure,
-                  errno_from, err_ret, ret_only, unmodeled_ne_ok] at H
-              · rw [ite_eq_right hlt] at H
-                by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
-                · rw [ite_eq_left hgrow] at H
+        by_cases htask : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · rw [ite_eq_left htask] at H
+          exact absurd H (by simp [err_ret, ret_only,
+            LinuxSem.LinuxProcessSem.pure])
+        · rw [ite_eq_right htask] at H ⊢
+          by_cases hold : page_align_is0_b old_size = true
+          · -- a zero rounded source length: both sides decline
+            rw [ite_eq_left hold] at H ⊢
+          · rw [ite_eq_right hold] at H ⊢
+            rw [bind_getModel] at H
+            try dsimp only at H
+            generalize hOldN : page_round_up_Z (old_size.toNat : Int) = old_nZ at H
+            generalize hNewN : page_round_up_Z (new_size.toNat : Int) = new_nZ at H
+            generalize hOldW : BitVec.ofInt 64 old_nZ = old_n at H
+            generalize hNewW : BitVec.ofInt 64 new_nZ = new_n at H
+            by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old old_n old_nZ &&
+                mremap_backing_uniform_b m old old_n)) = true
+            · -- the source gate declines
+              rw [ite_eq_left hsrc] at H ⊢
+            · rw [ite_eq_right hsrc] at H ⊢
+              by_cases heq : (old_nZ == new_nZ) = true
+              · -- the equal-size no-op answers `ok`, not `unmodeled`
+                rw [ite_eq_left heq] at H
+                exact absurd H (by simp [ret_only,
+                  LinuxSem.LinuxProcessSem.pure])
+              · rw [ite_eq_right heq] at H ⊢
+                -- the alternative's arms are built from `choose` / `modify` /
+                -- `pure`, none of which can answer `unmodeled`
+                exfalso
+                unfold LinuxSem.LinuxProcessSem.modify at H
+                by_cases hlt : new_nZ < old_nZ
+                · rw [ite_eq_left hlt] at H
                   simp [LinuxSem.LinuxProcessSem.alt,
                     LinuxSem.LinuxProcessSem.bind,
                     LinuxSem.LinuxProcessSem.choose,
                     LinuxSem.LinuxProcessSem.pure,
                     errno_from, err_ret, ret_only, unmodeled_ne_ok] at H
-                · rw [ite_eq_right hgrow] at H
-                  simp [LinuxSem.LinuxProcessSem.alt,
-                    LinuxSem.LinuxProcessSem.bind,
-                    LinuxSem.LinuxProcessSem.choose,
-                    LinuxSem.LinuxProcessSem.pure,
-                    errno_from, err_ret, ret_only, unmodeled_ne_ok] at H
+                · rw [ite_eq_right hlt] at H
+                  by_cases hgrow : mremap_inplace_grow_b m old old_n new_n old_nZ new_nZ = true
+                  · rw [ite_eq_left hgrow] at H
+                    simp [LinuxSem.LinuxProcessSem.alt,
+                      LinuxSem.LinuxProcessSem.bind,
+                      LinuxSem.LinuxProcessSem.choose,
+                      LinuxSem.LinuxProcessSem.pure,
+                      errno_from, err_ret, ret_only, unmodeled_ne_ok] at H
+                  · rw [ite_eq_right hgrow] at H
+                    simp [LinuxSem.LinuxProcessSem.alt,
+                      LinuxSem.LinuxProcessSem.bind,
+                      LinuxSem.LinuxProcessSem.choose,
+                      LinuxSem.LinuxProcessSem.pure,
+                      errno_from, err_ret, ret_only, unmodeled_ne_ok] at H
 
 /-! ## Sanity checks
 
@@ -843,13 +865,28 @@ example (old_size : word) (eff : SyscallEffect) (m : Model) :
   rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_left (by decide)]
 
 /-- A rounded SOURCE length of zero is the clone shape: fail closed, after
-    the two -EINVAL gates and before the source gate. -/
+    the two -EINVAL gates, the new-length-in-TASK_SIZE gate and before the
+    source gate. -/
 example (eff : SyscallEffect) (m : Model) :
     check_mremap (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 0)
         (BitVec.ofInt 64 0x2000) (BitVec.ofInt 64 MREMAP_MAYMOVE) eff m =
       .CheckUnmodeled := by
   unfold check_mremap
-  rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_left (by decide)]
+  rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide),
+    ite_eq_right (by decide), ite_eq_left (by decide)]
+
+/-- A NEW LENGTH THAT ROUNDS ABOVE `TASK_SIZE` is -EINVAL, and it is
+    answered before the old length is read: `check_mremap_params` tests it
+    at mm/mremap.c:1775-1776, ahead of `vma_lookup`.  The example keeps the
+    OLD length at zero, the clone shape, so the gate must win for the
+    answer to be -EINVAL rather than a decline. -/
+example (old_size : word) (eff : SyscallEffect) (m : Model) :
+    check_mremap (BitVec.ofInt 64 0x1000) old_size (BitVec.ofInt 64 0x800000001000)
+        (BitVec.ofInt 64 MREMAP_MAYMOVE) eff m =
+      check_ret_only eff (errno_ret EINVAL) m [] := by
+  unfold check_mremap
+  rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide),
+    ite_eq_left (by decide)]
 
 end
 

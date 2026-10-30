@@ -59,6 +59,8 @@ def mremap_witness (old old_size new_size flags : word) (m : Model)
   else if !(((old.toNat : Int) % page_size) == 0) then
     ret_outcome (errno_ret EINVAL) m
   else if page_align_is0_b new_size then ret_outcome (errno_ret EINVAL) m
+  else if (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int) then
+    ret_outcome (errno_ret EINVAL) m
   else if page_align_is0_b old_size then .unmodeled
   else
     let old_nZ := page_round_up_Z (old_size.toNat : Int)
@@ -98,32 +100,36 @@ theorem mremap_witness_ok (old old_size new_size flags : word) (i : SyscallInput
         repeat rw [ite_eq_left hnew]
         exact pure_ok _ i m
       · repeat rw [ite_eq_right hnew]
-        by_cases hold : page_align_is0_b old_size = true
-        · -- a zero rounded source length: both sides decline
-          repeat rw [ite_eq_left hold]
-          exact unmodeled_intro i m
-        · repeat rw [ite_eq_right hold]
-          rw [bind_getModel]
-          by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old
-              (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
-              (page_round_up_Z (old_size.toNat : Int)) &&
-            mremap_backing_uniform_b m old
-              (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))))) = true
-          · -- a source the model does not track: both sides decline
-            repeat rw [ite_eq_left hsrc]
+        by_cases htask : (TASK_SIZE : Int) < page_round_up_Z (new_size.toNat : Int)
+        · repeat rw [ite_eq_left htask]
+          exact pure_ok _ i m
+        · repeat rw [ite_eq_right htask]
+          by_cases hold : page_align_is0_b old_size = true
+          · -- a zero rounded source length: both sides decline
+            repeat rw [ite_eq_left hold]
             exact unmodeled_intro i m
-          · repeat rw [ite_eq_right hsrc]
-            by_cases heq : (page_round_up_Z (old_size.toNat : Int) ==
-                page_round_up_Z (new_size.toNat : Int)) = true
-            · -- the equal-size no-op answers the source address
-              repeat rw [ite_eq_left heq]
-              exact pure_ok _ i m
-            · -- a resize: exhibit the injected -ENOMEM, state untouched
-              repeat rw [ite_eq_right heq]
-              exact alt_l _ _ i m _
-                (bind_step (errno_from mremap_errnos) (fun e => err_ret e) i m
-                  ENOMEM m _
-                  (errno_head_witness ENOMEM [] i m) (pure_ok _ i m))
+          · repeat rw [ite_eq_right hold]
+            rw [bind_getModel]
+            by_cases hsrc : (!(mremap_source_b (m_vmmaps m) old
+                (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int)))
+                (page_round_up_Z (old_size.toNat : Int)) &&
+              mremap_backing_uniform_b m old
+                (BitVec.ofInt 64 (page_round_up_Z (old_size.toNat : Int))))) = true
+            · -- a source the model does not track: both sides decline
+              repeat rw [ite_eq_left hsrc]
+              exact unmodeled_intro i m
+            · repeat rw [ite_eq_right hsrc]
+              by_cases heq : (page_round_up_Z (old_size.toNat : Int) ==
+                  page_round_up_Z (new_size.toNat : Int)) = true
+              · -- the equal-size no-op answers the source address
+                repeat rw [ite_eq_left heq]
+                exact pure_ok _ i m
+              · -- a resize: exhibit the injected -ENOMEM, state untouched
+                repeat rw [ite_eq_right heq]
+                exact alt_l _ _ i m _
+                  (bind_step (errno_from mremap_errnos) (fun e => err_ret e) i m
+                    ENOMEM m _
+                    (errno_head_witness ENOMEM [] i m) (pure_ok _ i m))
 
 end
 
@@ -162,6 +168,17 @@ example (m : Model) :
     mremap_witness (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 0)
         (BitVec.ofInt 64 0x2000) (BitVec.ofInt 64 MREMAP_MAYMOVE) m = .unmodeled := by
   unfold mremap_witness
-  rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_left (by decide)]
+  rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide),
+    ite_eq_right (by decide), ite_eq_left (by decide)]
+
+/-- A new length that rounds above `TASK_SIZE` is -EINVAL, answered before
+    the old length is read. -/
+example (m : Model) :
+    mremap_witness (BitVec.ofInt 64 0x1000) (BitVec.ofInt 64 0)
+        (BitVec.ofInt 64 0x800000001000) (BitVec.ofInt 64 MREMAP_MAYMOVE) m =
+      ret_outcome (errno_ret EINVAL) m := by
+  unfold mremap_witness
+  rw [ite_eq_right (by decide), ite_eq_right (by decide), ite_eq_right (by decide),
+    ite_eq_left (by decide)]
 
 end LinuxSem.Checks.Witness.Mm.Mremap
