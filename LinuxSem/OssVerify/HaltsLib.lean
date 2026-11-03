@@ -19,12 +19,11 @@
   needs its own rule, with its own answer to the filter.
 -/
 import Lean
-import LinuxSem.Checks.SpuriousCfg
 import LinuxSem.Common.CatExec
+import LinuxSem.Common.ExitSim
 import LinuxSem.Common.SeqExec
 import LinuxSem.Common.StoreOk
 import LinuxSem.Common.StreamSim
-import LinuxSem.Examples.PatchClassifyDemo.Verdicts
 
 set_option autoImplicit false
 
@@ -34,7 +33,6 @@ open LinuxSem.LinuxProcessSem.Run
 open LinuxSem.LinuxProcessSem.RiscvSemantics
 open LinuxSem.LinuxProcessSem.MemImageType
 open LinuxSem.LinuxProcessSem.Specs
-open LinuxSem.LinuxProcessSem.Bridge.Exit
 open LinuxSem.LinuxProcessSem.Sys.Uaccess
 open LinuxSem.LinuxProcessSem.StackLayout
 open LinuxSem.Common.PropExec
@@ -43,8 +41,7 @@ open LinuxSem.Common.CatSim
 open LinuxSem.Common.SeqExec
 open LinuxSem.Common.StreamSim
 open LinuxSem.EquivalenceDefinition.MustExit
-open LinuxSem.Checks.SpuriousCfg
-open LinuxSem.Examples.PatchClassifyDemo.Verdicts
+open LinuxSem.Common.ExitSim (is_exit_no exit_dispatch_ok sstep_instr_inv sstep_exit_inv)
 
 namespace LinuxSem.OssVerify.HaltsLib
 
@@ -315,22 +312,28 @@ abbrev ME (cfg : SpuriousCfg) (segs : List Segment) (S : List word)
     (ms : machine_state) (model : Model) : Prop :=
   must_exit_in_at_cfg cfg segs S ⟨ms, model⟩
 
+/-- `running` at a configuration with ONE successor.  A filtered step is a step
+    (`sstep_cfg_sub`), so an inversion of `sstep` rules out the error and names the
+    successor at every `cfg`. -/
+theorem me_one (Hm : model_ok model) {ms : machine_state} {evs : List event} {c' : config}
+    (hstep : sstep_cfg segs cfg ⟨ms, model⟩ evs (.SNext c'))
+    (hinv : ∀ evs st, sstep segs ⟨ms, model⟩ evs st → st = .SNext c')
+    (h : must_exit_in_at_cfg cfg segs S c') : ME cfg segs S ms model := by
+  refine must_exit_in_at_cfg.running _ Hm.halted ⟨_, _, hstep⟩ ?_ ?_
+  · intro evs herr
+    cases hinv evs _ (sstep_cfg_sub segs cfg _ _ _ herr)
+  · intro evs c₁ hss
+    cases hinv evs _ (sstep_cfg_sub segs cfg _ _ _ hss)
+    exact h
+
 /-- An instruction that steps: its one successor carries the claim. -/
 theorem me_step (Hm : model_ok model) {ms' : machine_state}
     (hstep : RiscvSemantics.step segs (mkst regs pc mem rom) = .MachineOk ms')
-    (h : ME cfg segs S ms' model) : ME cfg segs S (mkst regs pc mem rom) model := by
+    (h : ME cfg segs S ms' model) : ME cfg segs S (mkst regs pc mem rom) model :=
   have hsvc : (mkst regs pc mem rom).ms_svc_pending = none := rfl
-  have hacc : mi_account_step segs (mkst regs pc mem rom) model = .MachineOk (ms', model) := by
-    rw [mi_account_step_no_lazy segs _ model Hm.lazy, hstep]
-  refine must_exit_in_at_cfg.running _ Hm.halted
-    ⟨[], .SNext ⟨ms', model⟩, sstep_cfg.instr _ model ms' model Hm.halted hsvc hacc⟩ ?_ ?_
-  · intro evs herr
-    obtain ⟨-, hst⟩ := sstep_cfg_instr_only segs cfg _ model ms' Hm.lazy hsvc hstep evs .SError herr
-    cases hst
-  · intro evs c' hss
-    obtain ⟨-, hst⟩ := sstep_cfg_instr_only segs cfg _ model ms' Hm.lazy hsvc hstep evs (.SNext c') hss
-    cases hst
-    exact h
+  me_one Hm (sstep_cfg.instr _ model ms' model Hm.halted hsvc
+      (by rw [mi_account_step_no_lazy segs _ model Hm.lazy, hstep]))
+    (fun evs st hss => (sstep_instr_inv segs _ model ms' evs st Hm.lazy hsvc hstep hss).2) h
 
 /-- `exit_group` with an allowed masked status. -/
 theorem me_exit {n : Nat} (Hm : model_ok model)
@@ -340,26 +343,17 @@ theorem me_exit {n : Nat} (Hm : model_ok model)
   have hsvc : (pend regs pc mem rom).ms_svc_pending = some (w 94) := by
     show some (getr regs a7) = _
     rw [h7]
-  have hno : exit_number (sys_input segs (pend regs pc mem rom) (w 94)).in_sysno :=
-    Or.inr (show ((w 94).toNat : Int) = 94 by decide)
-  have hcode : ms_gpr (pend regs pc mem rom) 0 &&& BitVec.ofInt 64 255
+  have hno : is_exit_no (w 94) := Or.inr (show ((w 94).toNat : Int) = 94 by decide)
+  have hcode : in_arg (sys_input segs (pend regs pc mem rom) (w 94)) 0 &&& BitVec.ofInt 64 255
       = w n &&& BitVec.ofInt 64 255 := by
     show getr regs a0 &&& _ = _
     rw [h0]
-  have hspec := exit_spec_at segs (pend regs pc mem rom) model (w 94) hno
-  refine must_exit_in_at_cfg.running _ Hm.halted
-    ⟨_, _, sstep_cfg.exit _ model (w 94) (mkEffect (BitVec.ofInt 64 0) [] [])
-      (with_halted (in_arg (sys_input segs _ (w 94)) 0 &&& BitVec.ofInt 64 255) model) []
-      (w n &&& BitVec.ofInt 64 255) Hm.halted hsvc hspec
-      (by rw [m_halted_with_halted, sys_input_arg0, hcode]) (by rw [m_killed_with_halted])⟩ ?_ ?_
-  · intro evs herr
-    obtain ⟨m', hst, -, -⟩ := sstep_cfg_exit_only segs cfg _ model _ _ hsvc hno hcode evs .SError herr
-    cases hst
-  · intro evs c' hss
-    obtain ⟨m', hst, hhalt, hnk⟩ :=
-      sstep_cfg_exit_only segs cfg _ model _ _ hsvc hno hcode evs (.SNext c') hss
-    cases hst
-    exact must_exit_in_at_cfg.halted _ _ hhalt hin hnk
+  refine me_one Hm (sstep_cfg.exit _ model (w 94) _ _ [] (w n &&& BitVec.ofInt 64 255) Hm.halted
+      hsvc (exit_dispatch_ok _ model hno) (by rw [m_halted_with_halted, hcode])
+      (by rw [m_killed_with_halted]))
+    (fun evs st hss => (sstep_exit_inv segs _ model (w 94) evs st Hm.halted hsvc hno hss).2) ?_
+  exact must_exit_in_at_cfg.halted _ _ (by rw [m_halted_with_halted, hcode]) hin
+    (by rw [m_killed_with_halted])
 
 /-- `read` is not an injected arm, so no configuration filters its answers. -/
 theorem read_not_spurious (i : SyscallInput) (m : Model) (eff : SyscallEffect)
@@ -484,8 +478,7 @@ theorem runs_to_fault_not_refused (segs : List Segment) (c : config)
       cases hstar with
       | refl => exact budget_refused_at_no_lazy_instr segs ms model Hm.lazy hsvc hb
       | step _ evs c2 tr' _ h1 h2 =>
-          obtain ⟨-, hst⟩ := sstep_cfg_instr_only segs may_fail_cfg ms model ms' Hm.lazy hsvc hstep
-            evs (.SNext c2) ((sstep_cfg_may_fail segs _ _ _).mp h1)
+          obtain ⟨-, hst⟩ := sstep_instr_inv segs ms model ms' evs (.SNext c2) Hm.lazy hsvc hstep h1
           cases hst
           exact ih ⟨tr', c', h2, hb⟩
   | read_eof ms model x8 buf cnt Hm R Heof _ ih =>

@@ -185,7 +185,7 @@ open LinuxSem
 #print axioms OssVerify.Shapes.agrees_is_lps
 #print axioms OssVerify.Shapes.halts_within_budget_is_lps
 #print axioms OssVerify.Shapes.halts_may_fail_is_lps
-#print axioms OssVerify.Controls.exit0_agrees
+#print axioms Tests.OssVerifyControls.exit0_agrees
 #print axioms Examples.FuzzTlv.FixedProof.plain_halts_holds
 #print axioms Examples.FuzzTlv.FixedProof.plain_halts_may_fail_holds
 #print axioms Examples.FuzzTlv.BuggyRefutation.buggy_halts_refuted
